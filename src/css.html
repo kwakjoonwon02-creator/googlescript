@@ -300,10 +300,14 @@ body.in-game .bg-glow { opacity: 0.5; }
 
 .stage {
   flex: 1; display: flex; align-items: center; justify-content: center;
-  gap: 26px; padding: 20px;
+  padding: 20px;
 }
 
-.play-area { display: flex; align-items: flex-start; gap: 12px; }
+.match-column { display: flex; flex-direction: column; align-items: center; }
+
+/* Every column shares the matrix's top edge, the way a stacker expects. */
+.play-area { display: flex; align-items: flex-start; gap: 14px; }
+.play-area .side.left { align-items: stretch; }
 
 /* ---- side columns ---- */
 .side {
@@ -385,19 +389,27 @@ canvas#board { display: block; }
   display: block; font-size: 15px; letter-spacing: 0.24em; color: var(--text-dim); margin-top: 8px;
 }
 
-/* ---- clear / spin popups on the left of the board ---- */
+/* ---- clear / spin popups, in their own lane left of the matrix ---- */
+.popup-rail {
+  width: 156px; align-self: stretch;
+  position: relative; overflow: hidden;
+  pointer-events: none;
+}
 .popups {
-  position: absolute; right: calc(100% + 14px); top: 34%;
-  width: 190px; text-align: right;
+  position: absolute; right: 0; top: 30%;
+  width: 100%; text-align: right;
   display: flex; flex-direction: column; align-items: flex-end; gap: 3px;
   pointer-events: none;
 }
 .popup {
-  font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
   animation: popup-in 0.18s ease-out, popup-out 0.5s ease-in 1.0s forwards;
-  white-space: nowrap;
+  /* Long labels wrap rather than getting clipped by the lane. */
+  line-height: 1.04;
+  word-break: keep-all;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.85);
 }
-.popup.type   { font-size: 25px; color: #fff; text-shadow: 0 0 20px currentColor; }
+.popup.type   { font-size: 22px; color: #fff; text-shadow: 0 0 20px currentColor; }
 .popup.spin   { color: var(--piece-t); }
 .popup.quad   { color: var(--piece-i); }
 .popup.b2b    { font-size: 16px; color: var(--warn); }
@@ -407,7 +419,7 @@ canvas#board { display: block; }
 @keyframes popup-out { to { opacity: 0; transform: translateX(-14px); } }
 
 /* ---- opponents ---- */
-.opponents { display: flex; gap: 14px; align-items: flex-start; }
+.opponents { display: flex; gap: 14px; align-items: flex-start; margin-left: 10px; }
 
 .opponent {
   display: flex; flex-direction: column; gap: 6px;
@@ -567,9 +579,17 @@ canvas#board { display: block; }
   .opponents { flex-direction: column; }
   .title-xl { font-size: 46px; }
 }
+@media (max-width: 1200px) {
+  .popup-rail { width: 108px; }
+  .popup.type  { font-size: 17px; }
+  .popup.combo { font-size: 15px; }
+  .popup.pc    { font-size: 17px; }
+  .popup.b2b   { font-size: 13px; }
+}
 @media (max-width: 900px) {
   .screen { padding: 16px; }
   .side { width: 104px; }
-  .stage { gap: 12px; padding: 10px; }
+  .stage { padding: 10px; }
+  .popup-rail { display: none; }
 }
 </style>

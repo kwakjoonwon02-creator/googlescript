@@ -104,6 +104,7 @@ function Players_publicView(player) {
     rd: Math.round(Number(player.rd)),
     rank: player.rank,
     rankColor: Ranks_color(player.rank),
+    bestRank: player.bestRank || RANKS.UNRANKED.name,
     games: Number(player.games),
     wins: Number(player.wins),
     losses: Number(player.losses),

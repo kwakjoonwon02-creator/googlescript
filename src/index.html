@@ -20,7 +20,7 @@
   <?!= include('ui'); ?>
 
   <script>
-    window.APP_INFO = { name: <?= '"' + appName + '"' ?>, version: <?= '"' + appVersion + '"' ?> };
+    window.APP_INFO = <?!= appInfoJson ?>;
   </script>
   <?!= include('js_util'); ?>
   <?!= include('js_engine'); ?>

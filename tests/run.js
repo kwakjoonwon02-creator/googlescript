@@ -13,6 +13,7 @@ const SUITES = [
   { name: 'engine', file: 'engine.test.js', browser: false },
   { name: 'rating', file: 'rating.test.js', browser: false },
   { name: 'server', file: 'server.test.js', browser: false },
+  { name: 'template', file: 'template.test.js', browser: false },
   { name: 'browser', file: 'browser.test.js', browser: true },
   { name: 'online', file: 'online.test.js', browser: true }
 ];

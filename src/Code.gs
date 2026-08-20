@@ -17,7 +17,9 @@ var APP = {
 function doGet(e) {
   var t = HtmlService.createTemplateFromFile('index');
   t.appName = APP.name;
-  t.appVersion = APP.version;
+  // Pre-serialised because <?= ?> HTML-escapes, which would corrupt the
+  // string literals if this were interpolated inside the <script> block.
+  t.appInfoJson = JSON.stringify({ name: APP.name, version: APP.version });
   return t.evaluate()
     .setTitle(APP.name)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1, user-scalable=no')

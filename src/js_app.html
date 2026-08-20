@@ -52,7 +52,10 @@ var App = (function () {
       placement.textContent = '배치 경기 ' + (10 - p.placementsLeft) + '/10 — ' +
         p.placementsLeft + '경기 더 치르면 랭크가 부여됩니다.';
     } else {
-      placement.textContent = '최고 랭크 ' + p.rank + ' · 연승 ' + Math.max(0, p.streak);
+      var streak = Number(p.streak) || 0;
+      placement.textContent = '최고 랭크 ' + (p.bestRank || p.rank) +
+        ' · ' + (streak >= 0 ? streak + '연승' : (-streak) + '연패') +
+        ' · 최고 TR ' + Math.round(p.peakTr).toLocaleString();
     }
 
     var nameField = U.$('#cfg-name');
@@ -81,9 +84,12 @@ var App = (function () {
         html:
           '<div class="switch-label"><b style="color:' + (m.won ? 'var(--good)' : 'var(--bad)') + '">' +
           (m.won ? 'WIN' : 'LOSS') + '</b> vs ' + U.escapeHtml(m.opponent) +
-          '<small>' + U.escapeHtml(m.score) + ' · ' + U.fmtAgo(m.ts) + '</small></div>' +
-          '<div class="mono ' + (delta >= 0 ? 'up' : 'down') + '">' +
-          (delta >= 0 ? '+' : '') + delta + '</div>'
+          '<small>' + (m.mode === 'ranked' ? 'RANKED' : 'CASUAL') + ' · ' +
+          U.escapeHtml(m.score) + ' · ' + U.fmtAgo(m.ts) + '</small></div>' +
+          (m.mode === 'ranked'
+            ? '<div class="mono ' + (delta >= 0 ? 'up' : 'down') + '">' +
+              (delta >= 0 ? '+' : '') + delta + '</div>'
+            : '<div class="mono faint">—</div>')
       }));
     });
   }

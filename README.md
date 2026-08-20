@@ -7,6 +7,17 @@ Google Apps Script 위에서 도는 멀티플레이 테트리스입니다. TETR.
 스프레드시트 하나가 데이터베이스이고, 웹앱 하나가 서버 겸 클라이언트입니다.
 외부 서비스·서버·빌드 도구가 필요 없습니다.
 
+![대전 화면](docs/game.jpg)
+
+<details>
+<summary>다른 화면들</summary>
+
+![메인 메뉴](docs/menu.jpg)
+![랭킹](docs/leaderboard.jpg)
+![설정](docs/config.jpg)
+
+</details>
+
 ---
 
 ## 무엇이 들어 있나
@@ -204,6 +215,9 @@ src/
   js_net.html         google.script.run 래퍼
   js_game.html        게임 루프, 모드, HUD, 대전 진행
   js_app.html         화면 전환과 메뉴
+
+tests/                헤드리스 테스트 (src/ 를 직접 읽습니다)
+docs/                 README 스크린샷
 ```
 
 ---
@@ -239,6 +253,7 @@ npm run test:fast    # 브라우저 없이 Node 스위트만
 | `engine` | 27 | 7-bag 균등성, SRS 회전 사이클과 벽 충돌, 라인 클리어와 행 압축, T-스핀 코너 규칙과 실제 TSD, 공격 테이블, 가비지 삽입·상쇄·상한·지연, 탑아웃과 Zen, 직렬화, 봇 300피스 완주 |
 | `rating` | 12 | Glickman(2013) 논문 예제 대조 (1464.06 / 151.52 / 0.05999), RD 수렴, 업셋 보상, TR 단조성 |
 | `server` | 27 | 계정과 토큰, 매칭 페어링과 밴드 확장, 방 상태머신, 연결 끊김, 공격 릴레이와 로그 상한, FT3 정산 1회성, 재대결 방지·허용, 방 권한과 정원, 백분위 랭크 |
+| `template` | 8 | `doGet` 이 만드는 페이지를 HtmlService 와 같은 규칙으로 렌더링해 검사 — 스크립틀릿 잔여물, include 해석과 순서, 모든 `<script>` 블록의 파싱(= `<?= ?>` 이스케이프로 JS가 깨지는 사고 차단), 매니페스트, 클라이언트/서버 RPC 목록 일치 |
 | `browser` | 26 | 실제 Chromium에서 부팅 → 40 LINES 완주 → CPU 대전 → 랭킹·설정·키 리바인드 → 방 생성, 무오류 확인 |
 | `online` | 18 | 탭 두 개가 공유 백엔드로 실제 대전: 시드 일치, 가비지 전달, 라운드 판정, 경기 전체 통계, TR 정산 |
 

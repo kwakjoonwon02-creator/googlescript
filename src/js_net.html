@@ -62,7 +62,8 @@ var Net = (function () {
     }).then(function (data) {
       creds = data.credentials;
       U.save('creds', creds);
-      serverOffset = data.server.time - Date.now();
+      // The clock offset is already set by call() with a latency correction;
+      // recomputing it here from the payload alone would be less accurate.
       window.RANK_COLORS = {};
       data.ranks.ladder.forEach(function (r) { window.RANK_COLORS[r.name] = r.color; });
       window.RANK_COLORS[data.ranks.unranked.name] = data.ranks.unranked.color;

@@ -29,7 +29,7 @@
     </div>
 
     <div class="row grow" style="gap:34px">
-      <div style="flex:1.35;min-width:0">
+      <div style="flex:1.35;min-width:0;display:flex;flex-direction:column;justify-content:center">
         <h1 class="title-xl" style="margin-bottom:26px">TETRA<span class="dot">.</span>GS</h1>
         <div class="menu-list">
 
@@ -350,23 +350,8 @@
   <!-- ========================================================== GAME -->
   <section class="screen" id="screen-game">
     <div class="stage">
+      <div class="match-column">
 
-      <div class="side">
-        <div class="side-box">
-          <div class="cap">Hold</div>
-          <canvas id="hold-canvas" width="112" height="72"></canvas>
-        </div>
-        <div class="stat-block" id="stat-block">
-          <div class="stat timer"><span class="k">Time</span><span class="v" id="s-time">0:00</span></div>
-          <div class="stat"><span class="k">Lines</span><span class="v" id="s-lines">0</span></div>
-          <div class="stat"><span class="k">Pieces</span><span class="v" id="s-pieces">0</span></div>
-          <div class="stat"><span class="k">PPS</span><span class="v" id="s-pps">0.00</span></div>
-          <div class="stat"><span class="k">APM</span><span class="v" id="s-apm">0.0</span></div>
-          <div class="stat" id="s-extra-wrap"><span class="k" id="s-extra-k">VS</span><span class="v" id="s-extra">0.0</span></div>
-        </div>
-      </div>
-
-      <div style="display:flex;flex-direction:column;align-items:center">
         <div class="score-strip" id="score-strip" style="display:none">
           <div class="score-side">
             <div class="rank-badge sm" id="ss-my-rank">Z</div>
@@ -381,13 +366,32 @@
           </div>
         </div>
 
+        <!-- One row, all columns aligned to the top of the matrix. -->
         <div class="play-area">
+          <div class="side left">
+            <div class="side-box">
+              <div class="cap">Hold</div>
+              <canvas id="hold-canvas" width="112" height="72"></canvas>
+            </div>
+            <div class="stat-block" id="stat-block">
+              <div class="stat timer"><span class="k">Time</span><span class="v" id="s-time">0:00</span></div>
+              <div class="stat"><span class="k">Lines</span><span class="v" id="s-lines">0</span></div>
+              <div class="stat"><span class="k">Pieces</span><span class="v" id="s-pieces">0</span></div>
+              <div class="stat"><span class="k">PPS</span><span class="v" id="s-pps">0.00</span></div>
+              <div class="stat"><span class="k">APM</span><span class="v" id="s-apm">0.0</span></div>
+              <div class="stat" id="s-extra-wrap"><span class="k" id="s-extra-k">VS</span><span class="v" id="s-extra">0.0</span></div>
+            </div>
+          </div>
+
+          <!-- Clear/combo callouts get their own lane so they never sit on
+               top of the stats panel or obscure the matrix. -->
+          <div class="popup-rail"><div class="popups" id="popups"></div></div>
+
           <div class="board-wrap">
             <div class="garbage-meter"><div class="garbage-fill" id="garbage-fill" style="height:0%"></div></div>
             <div class="board-frame">
               <canvas id="board" width="320" height="672"></canvas>
               <div class="board-overlay" id="board-overlay"></div>
-              <div class="popups" id="popups"></div>
             </div>
           </div>
 
@@ -397,10 +401,11 @@
               <canvas id="next-canvas" width="112" height="330"></canvas>
             </div>
           </div>
-        </div>
-      </div>
 
-      <div class="opponents" id="opponents"></div>
+          <div class="opponents" id="opponents"></div>
+        </div>
+
+      </div>
     </div>
   </section>
 
