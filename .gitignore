@@ -3,3 +3,4 @@ node_modules/
 .DS_Store
 *.log
 tests/node_modules
+relay/node_modules

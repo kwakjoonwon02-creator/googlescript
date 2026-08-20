@@ -14,8 +14,10 @@ const SUITES = [
   { name: 'rating', file: 'rating.test.js', browser: false },
   { name: 'server', file: 'server.test.js', browser: false },
   { name: 'template', file: 'template.test.js', browser: false },
+  { name: 'relay', file: 'relay.test.js', browser: false },
   { name: 'browser', file: 'browser.test.js', browser: true },
-  { name: 'online', file: 'online.test.js', browser: true }
+  { name: 'online', file: 'online.test.js', browser: true },
+  { name: 'online-relay', file: 'online-relay.test.js', browser: true }
 ];
 
 const arg = process.argv[2];

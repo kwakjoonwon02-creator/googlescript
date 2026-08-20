@@ -6,6 +6,7 @@
  * forward to skip countdowns and interludes.
  */
 const vm = require('vm');
+const crypto = require('crypto');
 const { SERVER_FILES, read } = require('./sources');
 
 function makeGasSandbox() {
@@ -102,7 +103,8 @@ function makeGasSandbox() {
   const PropertiesService = {
     getScriptProperties: () => ({
       getProperty: k => (props.has(k) ? props.get(k) : null),
-      setProperty: (k, v) => { props.set(k, v); }
+      setProperty: (k, v) => { props.set(k, v); },
+      deleteProperty: k => { props.delete(k); }
     })
   };
 
@@ -119,7 +121,33 @@ function makeGasSandbox() {
   };
 
   const Utilities = {
-    getUuid: () => 'uuid-' + String(++uuidCounter).padStart(12, '0') + '-abcdef0123456789'
+    getUuid: () => 'uuid-' + String(++uuidCounter).padStart(12, '0') + '-abcdef0123456789',
+
+    // Apps Script hands back signed bytes (-128..127), and code that base64s
+    // the result depends on that. Reproducing it exactly is the point: the
+    // relay verifies these signatures with Node's crypto.
+    computeHmacSha256Signature(value, key) {
+      const digest = crypto.createHmac('sha256', key).update(String(value), 'utf8').digest();
+      return Array.from(digest).map(b => (b > 127 ? b - 256 : b));
+    },
+
+    base64EncodeWebSafe(input) {
+      const buffer = Array.isArray(input)
+        ? Buffer.from(input.map(b => (b < 0 ? b + 256 : b)))
+        : Buffer.from(String(input), 'utf8');
+      return buffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_');
+    }
+  };
+
+  const ContentService = {
+    MimeType: { JSON: 'application/json' },
+    createTextOutput(text) {
+      return {
+        _text: text,
+        setMimeType() { return this; },
+        getContent() { return this._text; }
+      };
+    }
   };
 
   // rpc() logs every caught error, and several tests exercise failure paths
@@ -134,7 +162,7 @@ function makeGasSandbox() {
     Math, JSON, Object, Array, String, Number, Boolean, Error, RegExp,
     isFinite, isNaN, parseInt, parseFloat,
     Date: FakeDate,
-    SpreadsheetApp, CacheService, PropertiesService, LockService, Utilities,
+    SpreadsheetApp, CacheService, PropertiesService, LockService, Utilities, ContentService,
     Logger: { log() {} },
     HtmlService: {},
     Session: {},
@@ -149,6 +177,7 @@ function makeGasSandbox() {
       advance(ms) { offset += ms; return nowMs(); }
     },
     __cache: cache,
+    __props: props,
     __lockHeld: () => lockHeld
   };
   sandbox.globalThis = sandbox;

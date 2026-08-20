@@ -107,7 +107,9 @@ t('every RPC method the client calls exists on the server', () => {
   const called = new Set();
   CLIENT_FILES.forEach(file => {
     const src = read(file);
-    const re = /call\(\s*'([a-zA-Z]+)'/g;
+    // Matches call('x') and its transport-specific wrappers, e.g.
+    // appsScriptCall('x'), so splitting the transport does not read as drift.
+    const re = /[Cc]all\(\s*'([a-zA-Z]+)'/g;
     let m;
     while ((m = re.exec(src)) !== null) called.add(m[1]);
   });

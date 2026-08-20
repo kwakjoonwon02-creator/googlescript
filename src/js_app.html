@@ -259,7 +259,9 @@ var App = (function () {
 
   /* ------------------------------------------------------------- ranked */
 
-  var QUEUE_POLL_MS = 2200;
+  /* Matchmaking polls. Over the relay a round trip is cheap enough to ask
+     far more often, which is most of why a relay match starts sooner. */
+  function queuePollMs() { return Net.isRelay() ? 600 : 2200; }
 
   /**
    * Join and poll return the same shape, and joining can pair you on the
@@ -291,7 +293,7 @@ var App = (function () {
     Net.queueJoin().then(function (status) {
       if (handleQueueStatus(status)) return;
       stopQueue();
-      queueTimer = setInterval(pollQueue, QUEUE_POLL_MS);
+      queueTimer = setInterval(pollQueue, queuePollMs());
     }).catch(queueFailed);
   }
 
