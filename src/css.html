@@ -166,17 +166,20 @@ body.in-game .bg-glow { opacity: 0.4; }
 @keyframes deal { from { opacity: 0; transform: translate3d(-26px, 0, 0) skewX(var(--skew)); } }
 
 /* Full-screen wipe played on every navigation. */
+/* The panels are near-black on purpose. A full-viewport sweep of saturated
+   colour is a large luminance swing several times a minute, which is
+   genuinely unpleasant to sit in front of; the accent survives as a thin
+   leading edge, which carries the same signature without the flood. */
 #wipe {
   position: fixed; inset: -10% -20%;
   z-index: 60; pointer-events: none;
   display: flex; gap: 0;
   transform: translateX(-130%) skewX(var(--skew));
 }
-#wipe span { flex: 1; }
-#wipe span:nth-child(1) { background: var(--accent); }
-#wipe span:nth-child(2) { background: var(--surface-2); }
-#wipe span:nth-child(3) { background: var(--bg); }
-#wipe.run { animation: wipe 0.62s cubic-bezier(0.7, 0, 0.2, 1) both; }
+#wipe span:nth-child(1) { flex: 1; background: var(--bg); }
+#wipe span:nth-child(2) { flex: 1; background: var(--bg-2); }
+#wipe span:nth-child(3) { flex: 0 0 5px; background: var(--accent); }
+#wipe.run { animation: wipe 0.5s cubic-bezier(0.65, 0, 0.25, 1) both; }
 @keyframes wipe {
   0%   { transform: translateX(-130%) skewX(var(--skew)); }
   100% { transform: translateX(130%) skewX(var(--skew)); }

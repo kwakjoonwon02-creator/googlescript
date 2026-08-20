@@ -17,8 +17,11 @@ function startServer() {
   });
 }
 
-async function setName(page, name) {
-  await page.waitForSelector('#screen-menu.active', { timeout: 15000 });
+async function setName(page, name, bootTimeout) {
+  // Booting the third context of the third browser in a suite run is the
+  // slowest moment in the whole test set; give it room rather than reading a
+  // loaded machine as a product failure.
+  await page.waitForSelector('#screen-menu.active', { timeout: bootTimeout || 15000 });
   if (await page.isVisible('#modal-host.open')) {
     await page.fill('#modal-body input.input', name);
     await page.click('#modal-body button.primary');
@@ -274,7 +277,7 @@ async function driveMatch(loser, winner, timeoutMs) {
   let watchCode = null;
 
   await t('a third client joins a live room as a spectator', async () => {
-    await setName(C, 'Watcher');
+    await setName(C, 'Watcher', 45000);
 
     // Fresh casual room: A hosts, B plays, C watches.
     for (const page of [A, B]) {

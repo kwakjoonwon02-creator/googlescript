@@ -465,6 +465,63 @@ const { testAsync: t, assert, eq, section, note, finish } = require('./lib/repor
     await page.waitForSelector('#screen-menu.active', { timeout: 5000 });
   });
 
+  section('screen transition comfort');
+
+  await t('nothing large and bright sweeps the screen on navigation', async () => {
+    const panels = await page.evaluate(() => {
+      const luminance = (css) => {
+        const m = css.match(/\d+(\.\d+)?/g).slice(0, 3).map(Number);
+        const lin = m.map(v => {
+          const c = v / 255;
+          return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+      };
+      // offsetWidth, not getBoundingClientRect: the wipe is skewed, and the
+      // bounding box of a sheared element includes the overhang.
+      return Array.from(document.querySelectorAll('#wipe span')).map(el => ({
+        width: el.offsetWidth,
+        lum: +luminance(getComputedStyle(el).backgroundColor).toFixed(4)
+      }));
+    });
+    note(JSON.stringify(panels));
+    eq(panels.length, 3, 'wipe panels');
+    panels.forEach(function (p) {
+      // A panel wide enough to fill the view must be near-black; only a thin
+      // leading edge is allowed to carry the accent.
+      if (p.width > 40) {
+        assert(p.lum < 0.02,
+          'a ' + p.width + 'px panel has luminance ' + p.lum + ' — too bright to sweep the screen');
+      } else {
+        assert(p.width <= 12, 'the accent edge should be a hairline, got ' + p.width + 'px');
+      }
+    });
+    assert(panels.some(p => p.width <= 12), 'the accent leading edge is missing');
+  });
+
+  await t('the transition can be switched off', async () => {
+    const ran = await page.evaluate(async () => {
+      CONFIG.transitions = false;
+      const wipe = document.querySelector('#wipe');
+      wipe.classList.remove('run');
+      App.showScreen('menu');
+      App.showScreen('solo');
+      const off = wipe.classList.contains('run');
+      CONFIG.transitions = true;
+      App.showScreen('menu');
+      const on = wipe.classList.contains('run');
+      App.showScreen('menu');
+      return { off: off, on: on };
+    });
+    eq(ran.off, false, 'the wipe still ran with transitions off');
+    eq(ran.on, true, 'the wipe should run when enabled');
+  });
+
+  await t('the app is left on the menu for whatever runs next', async () => {
+    await page.evaluate(() => App.showScreen('menu'));
+    await page.waitForSelector('#screen-menu.active', { timeout: 5000 });
+  });
+
   section('error budget');
   await t('no uncaught errors across the whole session', async () => {
     const errs = await page.evaluate(() => window.__errors);

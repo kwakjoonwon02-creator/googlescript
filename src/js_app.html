@@ -61,7 +61,7 @@ var App = (function () {
     document.body.classList.toggle('in-game', name === 'game');
     // The wipe reads as a transition, not a flash, so it only runs when the
     // screen actually changed and never on the very first paint.
-    if (changed && previous !== 'boot') U.replay(U.$('#wipe'), 'run');
+    if (changed && previous !== 'boot' && CONFIG.transitions) U.replay(U.$('#wipe'), 'run');
   }
 
   function currentScreen() { return current; }
@@ -756,7 +756,7 @@ var App = (function () {
     U.$('#cfg-ft').textContent = pendingRoomConfig.ft;
     U.$('#cfg-max').textContent = pendingRoomConfig.maxPlayers;
 
-    ['ghost', 'grid', 'shake', 'effects', 'sound'].forEach(function (key) {
+    ['ghost', 'grid', 'shake', 'effects', 'transitions', 'sound'].forEach(function (key) {
       var btn = U.$('[data-toggle="' + key + '"]');
       if (!btn) return;
       btn.textContent = CONFIG[key] ? 'ON' : 'OFF';
@@ -789,7 +789,7 @@ var App = (function () {
     U.$('#btn-reset-config').addEventListener('click', function () {
       CONFIG.das = 100; CONFIG.arr = 0; CONFIG.sdf = 41;
       CONFIG.ghost = true; CONFIG.grid = true; CONFIG.shake = true;
-      CONFIG.effects = true; CONFIG.sound = true;
+      CONFIG.effects = true; CONFIG.transitions = true; CONFIG.sound = true;
       CONFIG.binds = Object.assign({}, Input.defaults);
       saveConfig();
       syncConfigUI();
