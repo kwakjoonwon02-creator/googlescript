@@ -22,8 +22,11 @@ const { testAsync: t, assert, eq, section, note, finish } = require('./lib/repor
     await page.waitForSelector('#screen-menu.active', { timeout: 10000 });
     const name = await page.textContent('#me-name');
     assert(name && name !== '—', 'profile name not filled in: ' + name);
-    const tr = await page.textContent('#me-tr');
-    eq(tr, '12,500', 'starting TR');
+    // TR counts up on load, so wait for it to settle rather than catching a
+    // frame mid-animation.
+    await page.waitForFunction(
+      () => document.querySelector('#me-tr').textContent === '12,500',
+      null, { timeout: 8000 });
   });
 
   await t('a nickname prompt is shown to a brand new player', async () => {
@@ -117,6 +120,35 @@ const { testAsync: t, assert, eq, section, note, finish } = require('./lib/repor
     assert(painted.hold > 200, 'hold box blank (' + painted.hold + ')');
   });
 
+  await t('a hard drop leaves a trail and a landing flash', async () => {
+    const fx = await page.evaluate(() => {
+      const g = Game.state();
+      g.fx = [];
+      g.engine.hardDrop();
+      return g.fx.map(f => ({ type: f.type, cells: f.cells.length, dist: f.dist || 0 }));
+    });
+    const kinds = fx.map(f => f.type);
+    assert(kinds.indexOf('drop') !== -1, 'no drop trail: ' + JSON.stringify(fx));
+    assert(kinds.indexOf('lock') !== -1, 'no landing flash: ' + JSON.stringify(fx));
+    eq(fx.filter(f => f.type === 'lock')[0].cells, 4, 'flash should cover the whole piece');
+
+    // They must expire on their own rather than accumulating forever.
+    await page.waitForFunction(() => Game.state().fx.length === 0, null, { timeout: 4000 });
+  });
+
+  await t('effects can be turned off', async () => {
+    const count = await page.evaluate(() => {
+      CONFIG.effects = false;
+      const g = Game.state();
+      g.fx = [];
+      g.engine.hardDrop();
+      const n = g.fx.length;
+      CONFIG.effects = true;
+      return n;
+    });
+    eq(count, 0, 'effects were still produced with the toggle off');
+  });
+
   await t('finishing 40 lines shows the result screen', async () => {
     await page.evaluate(() => {
       const e = Game.state().engine;
@@ -206,6 +238,11 @@ const { testAsync: t, assert, eq, section, note, finish } = require('./lib/repor
     await page.waitForSelector('#screen-config.active');
     const rows = await page.evaluate(() => document.querySelectorAll('#keybinds .keybind-row').length);
     eq(rows, 10, 'keybind rows');
+    const toggles = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('[data-toggle]')).map(b => b.getAttribute('data-toggle')));
+    ['ghost', 'grid', 'shake', 'effects', 'sound'].forEach(function (key) {
+      assert(toggles.indexOf(key) !== -1, 'missing toggle: ' + key);
+    });
     const before = await page.evaluate(() => CONFIG.ghost);
     await page.click('[data-toggle="ghost"]');
     eq(await page.evaluate(() => CONFIG.ghost), !before, 'ghost toggle');

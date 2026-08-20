@@ -94,6 +94,47 @@ var U = (function () {
     try { localStorage.removeItem(LS_PREFIX + key); } catch (e) {}
   }
 
+  /* ---------------------------------------------------------------- motion */
+
+  var reduceMotion = (function () {
+    try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
+    catch (e) { return false; }
+  })();
+
+  /**
+   * Animates a number into place. Big values matter here — a TR swing is the
+   * whole point of a ranked result — and a number that lands instantly reads
+   * like a static label.
+   */
+  function countUp(node, to, options) {
+    if (!node) return;
+    var opts = options || {};
+    var duration = opts.ms || 900;
+    var from = opts.from === undefined ? 0 : opts.from;
+    var format = opts.format || function (v) { return Math.round(v).toLocaleString(); };
+
+    if (reduceMotion || duration <= 0) { node.textContent = format(to); return; }
+
+    var start = null;
+    function step(now) {
+      if (start === null) start = now;
+      var t = Math.min(1, (now - start) / duration);
+      // Ease out quintic: fast off the mark, long settle.
+      var eased = 1 - Math.pow(1 - t, 5);
+      node.textContent = format(from + (to - from) * eased);
+      if (t < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+
+  /** Restarts a CSS animation by forcing a reflow between class toggles. */
+  function replay(node, className) {
+    if (!node || reduceMotion) return;
+    node.classList.remove(className);
+    void node.offsetWidth;
+    node.classList.add(className);
+  }
+
   /* ----------------------------------------------------------------- toast */
 
   function toast(message, kind, ms) {
@@ -166,6 +207,7 @@ var U = (function () {
     $: $, $$: $$, el: el, clear: clear, escapeHtml: escapeHtml,
     fmtTime: fmtTime, fmtTimeMs: fmtTimeMs, fmtNum: fmtNum, fmtAgo: fmtAgo, clamp: clamp,
     load: load, save: save, drop: drop,
+    countUp: countUp, replay: replay, reduceMotion: reduceMotion,
     toast: toast, modal: modal, closeModal: closeModal,
     paintRankBadge: paintRankBadge, pickTextColor: pickTextColor,
     beep: beep

@@ -487,6 +487,7 @@ Engine.prototype.lockPiece = function () {
 
   this.emit('lock', {
     type: lockedType,
+    cells: cells,          // where it came to rest, for the lock flash
     lines: lineCount,
     spin: spin,
     combo: this.combo,

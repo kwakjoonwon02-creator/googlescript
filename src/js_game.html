@@ -47,6 +47,7 @@ var Game = (function () {
     foldedRound: -1,
 
     // fx
+    fx: [],                     // short-lived board effects (drop trails, locks)
     shake: 0,
     flash: 0,
     startedAt: 0,
@@ -178,7 +179,20 @@ var Game = (function () {
   }
 
   function wireEngine(engine) {
+    engine.on('harddrop', function (ev) {
+      if (!CONFIG.effects || ev.cells <= 0 || !engine.piece) return;
+      G.fx.push({
+        type: 'drop',
+        cells: engine.pieceCells(),
+        dist: ev.cells,
+        color: PIECES[engine.piece.type].color,
+        at: performance.now()
+      });
+    });
     engine.on('lock', function (ev) {
+      if (CONFIG.effects && ev.cells) {
+        G.fx.push({ type: 'lock', cells: ev.cells, at: performance.now() });
+      }
       if (ev.lines > 0) {
         G.flash = Math.min(0.45, 0.12 + ev.lines * 0.07);
         if (CONFIG.shake) G.shake = Math.min(11, 2 + ev.lines * 1.7);
@@ -343,6 +357,12 @@ var Game = (function () {
     if (G.mode === 'cpu') updateLocalMatch(dt, now);
     if (G.isOnline) maybeSync(now);
     if (!G.isOnline && (G.phase === 'countdown')) updateLocalCountdown(now);
+
+    if (G.fx.length) {
+      G.fx = G.fx.filter(function (f) {
+        return (now - f.at) < Render.fxLifetime(f.type);
+      });
+    }
 
     G.shake *= Math.pow(0.86, dt / 16.67);
     G.flash *= Math.pow(0.80, dt / 16.67);
@@ -773,6 +793,7 @@ var Game = (function () {
     G.sentTo = {};
     G.attackedMeAt = {};
     G.lastTargetId = null;
+    G.fx = [];
     G.countdownShown = -1;
     clearOverlay();
     renderOpponentShells(room.players.filter(function (p) {
@@ -791,7 +812,9 @@ var Game = (function () {
       ghost: CONFIG.ghost,
       grid: CONFIG.grid,
       shake: G.shake,
-      flash: G.flash
+      flash: G.flash,
+      fx: G.fx,
+      now: performance.now()
     });
     Render.next(U.$('#next-canvas'), G.engine.nextQueue());
     Render.hold(U.$('#hold-canvas'), G.engine.hold, G.engine.holdUsed);
@@ -1027,11 +1050,15 @@ var Game = (function () {
     if (payload.mode === 'blitz') headline = payload.score.toLocaleString();
 
     var html = '<div class="subtitle center">' + titles[payload.mode] + '</div>' +
-      '<div class="result-headline ' + (payload.completed ? 'win' : 'lose') + '" style="font-size:52px;margin-top:12px">' +
-      U.escapeHtml(headline) + '</div>' +
+      '<div class="result-headline ' + (payload.completed ? 'win' : 'lose') +
+      '" style="font-size:60px;margin-top:14px">' + U.escapeHtml(headline) + '</div>' +
       (improved ? '<div class="rank-change-banner" style="color:var(--good)">개인 최고 기록 경신!</div>' : '') +
       statGridHtml(payload.stats);
     U.$('#result-card').innerHTML = html;
+
+    if (payload.mode === 'blitz') {
+      U.countUp(U.$('#result-card .result-headline'), payload.score, { ms: 1100 });
+    }
     G.result = { kind: 'solo', mode: payload.mode };
     App.showScreen('result');
   }
@@ -1097,6 +1124,16 @@ var Game = (function () {
 
     html += statGridHtml(matchStats());
     U.$('#result-card').innerHTML = html;
+
+    // The rating swing is the headline of a ranked result: run the new TR up
+    // from the old one instead of just printing it.
+    if (delta && room.results.ranked) {
+      var nums = U.$$('#result-card .tr-num');
+      if (nums.length === 2) {
+        U.countUp(nums[1], delta.trAfter, { from: delta.trBefore, ms: 1100 });
+      }
+    }
+
     G.result = { kind: 'versus', roomCode: room.code, ranked: room.mode === 'ranked' };
 
     App.refreshProfile();

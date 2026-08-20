@@ -4,15 +4,16 @@
    ghost piece, and a red tint that creeps in as the stack gets dangerous.
    ========================================================================= */
 
+/* Kept in step with the --piece-* custom properties in css.html. */
 var COLORS = {
-  1: '#3fd0e0', // I
-  2: '#4a63e8', // J
-  3: '#f08b34', // L
-  4: '#f2d13c', // O
-  5: '#4bd35f', // S
-  6: '#b455e5', // T
-  7: '#ee4f5e', // Z
-  8: '#6e6c80'  // garbage
+  1: '#2ee6ff', // I
+  2: '#4b6bff', // J
+  3: '#ff9f2e', // L
+  4: '#ffd93d', // O
+  5: '#4ade5e', // S
+  6: '#c05cff', // T
+  7: '#ff4d63', // Z
+  8: '#3c3c4c'  // garbage: deliberately dull so it reads as damage, not stack
 };
 
 var Render = (function () {
@@ -26,35 +27,40 @@ var Render = (function () {
     return 'rgb(' + f(r) + ',' + f(g) + ',' + f(b) + ')';
   }
 
-  /** One mino. `alpha` dims the buffer row above the playfield. */
+  /**
+   * One mino. Flat face, a bright hairline along the top edge and a dark one
+   * along the bottom — enough to separate stacked blocks without the heavy
+   * plastic bevel that makes a field look muddy.
+   * `alpha` dims the buffer row above the playfield.
+   */
   function block(ctx, x, y, size, colorIndex, alpha) {
     var base = COLORS[colorIndex] || '#555';
+    var garbage = colorIndex === 8;
     ctx.globalAlpha = alpha === undefined ? 1 : alpha;
 
     ctx.fillStyle = base;
     ctx.fillRect(x, y, size, size);
 
-    // Bevel: light along the top/left, dark along the bottom/right.
-    var inset = Math.max(1, Math.floor(size * 0.11));
-    ctx.fillStyle = shade(base, 46);
-    ctx.fillRect(x, y, size, inset);
-    ctx.fillRect(x, y, inset, size);
-    ctx.fillStyle = shade(base, -52);
-    ctx.fillRect(x, y + size - inset, size, inset);
-    ctx.fillRect(x + size - inset, y, inset, size);
+    var edge = Math.max(1, Math.round(size * 0.09));
+    ctx.fillStyle = shade(base, garbage ? 22 : 60);
+    ctx.fillRect(x, y, size, edge);
+    ctx.fillStyle = shade(base, garbage ? -12 : -40);
+    ctx.fillRect(x, y + size - edge, size, edge);
 
-    ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+    // A thin gap between blocks reads as a grid without drawing one.
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)';
     ctx.lineWidth = 1;
     ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
     ctx.globalAlpha = 1;
   }
 
+  /* The ghost is an outline only: a filled ghost competes with the stack. */
   function ghostBlock(ctx, x, y, size, colorIndex) {
     var base = COLORS[colorIndex] || '#888';
-    ctx.globalAlpha = 0.30;
+    ctx.globalAlpha = 0.09;
     ctx.fillStyle = base;
     ctx.fillRect(x, y, size, size);
-    ctx.globalAlpha = 0.85;
+    ctx.globalAlpha = 0.8;
     ctx.strokeStyle = base;
     ctx.lineWidth = 2;
     ctx.strokeRect(x + 1, y + 1, size - 2, size - 2);
@@ -152,6 +158,8 @@ var Render = (function () {
     ctx.lineTo(w, fieldTop + 0.5);
     ctx.stroke();
 
+    if (opts.fx && opts.fx.length) drawFx(ctx, opts.fx, cell, opts.now || 0);
+
     // Line-clear flash.
     if (opts.flash > 0) {
       ctx.fillStyle = 'rgba(255,255,255,' + Math.min(0.5, opts.flash) + ')';
@@ -160,6 +168,56 @@ var Render = (function () {
 
     ctx.restore();
   }
+
+  /**
+   * Short-lived impact effects: a streak marking how far a piece fell, and a
+   * white flash on the cells it landed in. Both are what makes a hard drop
+   * feel like it hit something.
+   */
+  var FX_DROP_MS = 240;
+  var FX_LOCK_MS = 150;
+
+  function drawFx(ctx, list, cell, now) {
+    for (var i = 0; i < list.length; i++) {
+      var f = list[i];
+      var age = now - f.at;
+
+      if (f.type === 'drop') {
+        var t = age / FX_DROP_MS;
+        if (t < 0 || t > 1) continue;
+        var colour = COLORS[f.color] || '#fff';
+        ctx.globalAlpha = (1 - t) * 0.45;
+        for (var c = 0; c < f.cells.length; c++) {
+          var cx = f.cells[c][0] * cell;
+          var cy = (f.cells[c][1] - RENDER_FROM) * cell;
+          var h = Math.min(f.dist, 22) * cell * (0.45 + 0.55 * t);
+          if (cy - h > canvasBottom(ctx)) continue;
+          var grad = ctx.createLinearGradient(0, cy - h, 0, cy);
+          grad.addColorStop(0, 'rgba(255,255,255,0)');
+          grad.addColorStop(1, colour);
+          ctx.fillStyle = grad;
+          ctx.fillRect(cx + cell * 0.22, cy - h, cell * 0.56, h);
+        }
+        ctx.globalAlpha = 1;
+
+      } else if (f.type === 'lock') {
+        var lt = age / FX_LOCK_MS;
+        if (lt < 0 || lt > 1) continue;
+        ctx.globalAlpha = (1 - lt) * 0.8;
+        ctx.fillStyle = '#ffffff';
+        for (var j = 0; j < f.cells.length; j++) {
+          ctx.fillRect(f.cells[j][0] * cell,
+                       (f.cells[j][1] - RENDER_FROM) * cell, cell, cell);
+        }
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+
+  function canvasBottom(ctx) { return ctx.canvas.height; }
+
+  /** How long the game layer should keep an effect around. */
+  function fxLifetime(type) { return type === 'drop' ? FX_DROP_MS : FX_LOCK_MS; }
 
   function stackHeight(engine) {
     for (var y = 0; y < BOARD_H; y++) {
@@ -250,7 +308,8 @@ var Render = (function () {
 
   return {
     board: board, next: next, hold: hold, mini: mini,
-    stackHeight: stackHeight, colors: COLORS, pieceInBox: pieceInBox
+    stackHeight: stackHeight, colors: COLORS, pieceInBox: pieceInBox,
+    fxLifetime: fxLifetime
   };
 })();
 </script>

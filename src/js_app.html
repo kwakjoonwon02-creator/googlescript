@@ -52,12 +52,16 @@ var App = (function () {
   /* ------------------------------------------------------------ screens */
 
   function showScreen(name) {
+    var changed = current !== name;
     U.$$('.screen').forEach(function (s) { s.classList.remove('active'); });
     var node = U.$('#screen-' + name);
     if (node) node.classList.add('active');
+    var previous = current;
     current = name;
-    if (name !== 'game') document.body.classList.remove('in-game');
-    if (name === 'game') document.body.classList.add('in-game');
+    document.body.classList.toggle('in-game', name === 'game');
+    // The wipe reads as a transition, not a flash, so it only runs when the
+    // screen actually changed and never on the very first paint.
+    if (changed && previous !== 'boot') U.replay(U.$('#wipe'), 'run');
   }
 
   function currentScreen() { return current; }
@@ -68,7 +72,9 @@ var App = (function () {
     if (!p) return;
     profile = p;
     U.$('#me-name').textContent = p.name;
-    U.$('#me-tr').textContent = Math.round(p.tr).toLocaleString();
+    var trNode = U.$('#me-tr');
+    var shownTr = Number(String(trNode.textContent).replace(/[^0-9]/g, '')) || 0;
+    U.countUp(trNode, Math.round(p.tr), { from: shownTr, ms: shownTr ? 700 : 1200 });
     U.$('#me-record').textContent = p.wins + 'W ' + p.losses + 'L';
     U.paintRankBadge(U.$('#me-rank'), p.rank, p.rankColor);
     U.$('#ranked-tr').textContent = Math.round(p.tr).toLocaleString();
@@ -706,7 +712,7 @@ var App = (function () {
           '<td class="num">' + U.fmtNum(r.pps, 2) + '</td></tr>';
       }).join('');
       host.innerHTML = '<table class="table"><thead><tr>' +
-        '<th>#</th><th>RANK</th><th>PLAYER</th><th class="num">TR</th>' +
+        '<th>#</th><th class="rank-col">RANK</th><th>PLAYER</th><th class="num">TR</th>' +
         '<th class="num">W/L</th><th class="num">APM</th><th class="num">PPS</th>' +
         '</tr></thead><tbody>' + rows + '</tbody></table>';
       return;
@@ -750,7 +756,7 @@ var App = (function () {
     U.$('#cfg-ft').textContent = pendingRoomConfig.ft;
     U.$('#cfg-max').textContent = pendingRoomConfig.maxPlayers;
 
-    ['ghost', 'grid', 'shake', 'sound'].forEach(function (key) {
+    ['ghost', 'grid', 'shake', 'effects', 'sound'].forEach(function (key) {
       var btn = U.$('[data-toggle="' + key + '"]');
       if (!btn) return;
       btn.textContent = CONFIG[key] ? 'ON' : 'OFF';
@@ -782,7 +788,8 @@ var App = (function () {
 
     U.$('#btn-reset-config').addEventListener('click', function () {
       CONFIG.das = 100; CONFIG.arr = 0; CONFIG.sdf = 41;
-      CONFIG.ghost = true; CONFIG.grid = true; CONFIG.shake = true; CONFIG.sound = true;
+      CONFIG.ghost = true; CONFIG.grid = true; CONFIG.shake = true;
+      CONFIG.effects = true; CONFIG.sound = true;
       CONFIG.binds = Object.assign({}, Input.defaults);
       saveConfig();
       syncConfigUI();

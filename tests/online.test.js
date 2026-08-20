@@ -216,7 +216,10 @@ async function driveMatch(loser, winner, timeoutMs) {
     assert(!/\bTR\b/.test(bText), 'casual match should not show a TR change');
     await B.click('#btn-result-menu');
     await B.waitForSelector('#screen-menu.active', { timeout: 10000 });
-    eq(await B.textContent('#me-tr'), '12,500', 'TR moved in a casual match');
+    // The menu TR counts up; wait for it to land before reading it.
+    await B.waitForFunction(
+      () => document.querySelector('#me-tr').textContent === '12,500',
+      null, { timeout: 10000 });
   });
 
   section('ranked, end to end');
