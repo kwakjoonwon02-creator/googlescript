@@ -43,18 +43,51 @@ Google Apps Script 위에서 도는 멀티플레이 테트리스입니다. TETR.
 
 ## 설치
 
-### 방법 A — clasp (권장)
+### 준비 — Apps Script API 켜기
+
+clasp를 쓰든 안 쓰든, clasp로 push하려면 이게 먼저 켜져 있어야 합니다.
+
+<https://script.google.com/home/usersettings> → **Google Apps Script API: 사용**
+
+### 방법 A — 브라우저에서 프로젝트만 만들고 clasp로 push (가장 안정적)
+
+`clasp create` 는 환경에 따라 잘 실패합니다. 프로젝트 생성만 브라우저에서
+하고 파일 업로드는 clasp에 맡기는 쪽이 훨씬 확실합니다.
+
+1. <https://script.google.com/home/projects/create> 에서 새 프로젝트를 만듭니다.
+2. 주소창에서 스크립트 ID를 복사합니다.
+   `https://script.google.com/home/projects/`**`1AbC...xyz`**`/edit` 의 굵은 부분입니다.
+3. 저장소 최상위(= `src` 폴더가 보이는 위치)에 `.clasp.json` 파일을 만듭니다.
+
+   ```json
+   {
+     "scriptId": "여기에_복사한_ID",
+     "rootDir": "src"
+   }
+   ```
+
+4. push 합니다.
+
+   ```bash
+   npm install -g @google/clasp
+   clasp login
+   clasp push
+   ```
+
+### 방법 B — clasp create 로 한 번에
 
 ```bash
 npm install -g @google/clasp
 clasp login
-clasp create --type webapp --title "TETRA.GS" --rootDir src
-# 생성된 .clasp.json 의 rootDir 이 "src" 인지 확인
+clasp create --type standalone --title "TETRA.GS" --rootDir src
 clasp push
-clasp deploy
 ```
 
-### 방법 B — 수동
+`--type` 은 반드시 **`standalone`** 입니다. `webapp` 을 넣으면
+`Invalid container file type` 으로 실패합니다 — 웹앱 설정은 타입이 아니라
+`appsscript.json` 의 `webapp` 블록과 배포 화면에서 정해집니다.
+
+### 방법 C — 전부 수동 (clasp 없이)
 
 1. <https://script.google.com> 에서 새 프로젝트를 만듭니다.
 2. 프로젝트 설정에서 **"appsscript.json 매니페스트 파일 표시"** 를 켭니다.
@@ -75,6 +108,18 @@ clasp deploy
 
 > `/dev` URL은 배포자 본인만 열 수 있습니다. 멀티플레이 테스트는 반드시
 > `/exec` URL로 하세요.
+
+### clasp 오류 해결
+
+| 메시지 | 원인과 해결 |
+|---|---|
+| `Invalid container file type` | `--type webapp` 을 썼을 때 납니다. `--type standalone` 으로 바꾸세요. |
+| `Project file already exists.` | 실패한 `clasp create` 가 남긴 `.clasp.json` 이 있습니다. 지우고 다시 하세요. Windows는 `del .clasp.json`, macOS/Linux는 `rm .clasp.json`. |
+| `Request contains an invalid argument.` | 대부분 `.clasp.json` 의 `scriptId` 가 비었거나 잘못됐습니다. 파일을 열어(Windows `type .clasp.json`) 실제 스크립트 ID가 들어 있는지 확인하세요. 값이 이상하면 지우고 **방법 A** 로 직접 써 넣으면 됩니다. |
+| `User has not enabled the Apps Script API` | 위의 **준비** 단계를 하지 않았습니다. |
+| `clasp: command not found` / 명령이 다르게 동작 | `clasp -v` 로 버전을 확인하세요. clasp 3.x는 일부 명령 이름이 바뀌었습니다. 버전과 무관하게 **방법 A** 는 그대로 동작합니다. |
+
+`clasp push` 가 성공하면 `Pushed 21 files.` 처럼 파일 수가 찍힙니다.
 
 ---
 
