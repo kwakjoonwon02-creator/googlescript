@@ -1,0 +1,256 @@
+<script>
+/* ============================================================== renderer ==
+   Flat blocks with a bevel, a dimmed buffer row above the field, an outlined
+   ghost piece, and a red tint that creeps in as the stack gets dangerous.
+   ========================================================================= */
+
+var COLORS = {
+  1: '#3fd0e0', // I
+  2: '#4a63e8', // J
+  3: '#f08b34', // L
+  4: '#f2d13c', // O
+  5: '#4bd35f', // S
+  6: '#b455e5', // T
+  7: '#ee4f5e', // Z
+  8: '#6e6c80'  // garbage
+};
+
+var Render = (function () {
+
+  function shade(hex, amount) {
+    var h = hex.replace('#', '');
+    var r = parseInt(h.slice(0, 2), 16);
+    var g = parseInt(h.slice(2, 4), 16);
+    var b = parseInt(h.slice(4, 6), 16);
+    var f = function (v) { return Math.max(0, Math.min(255, Math.round(v + amount))); };
+    return 'rgb(' + f(r) + ',' + f(g) + ',' + f(b) + ')';
+  }
+
+  /** One mino. `alpha` dims the buffer row above the playfield. */
+  function block(ctx, x, y, size, colorIndex, alpha) {
+    var base = COLORS[colorIndex] || '#555';
+    ctx.globalAlpha = alpha === undefined ? 1 : alpha;
+
+    ctx.fillStyle = base;
+    ctx.fillRect(x, y, size, size);
+
+    // Bevel: light along the top/left, dark along the bottom/right.
+    var inset = Math.max(1, Math.floor(size * 0.11));
+    ctx.fillStyle = shade(base, 46);
+    ctx.fillRect(x, y, size, inset);
+    ctx.fillRect(x, y, inset, size);
+    ctx.fillStyle = shade(base, -52);
+    ctx.fillRect(x, y + size - inset, size, inset);
+    ctx.fillRect(x + size - inset, y, inset, size);
+
+    ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
+    ctx.globalAlpha = 1;
+  }
+
+  function ghostBlock(ctx, x, y, size, colorIndex) {
+    var base = COLORS[colorIndex] || '#888';
+    ctx.globalAlpha = 0.30;
+    ctx.fillStyle = base;
+    ctx.fillRect(x, y, size, size);
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = base;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 1, y + 1, size - 2, size - 2);
+    ctx.globalAlpha = 1;
+  }
+
+  /* -------------------------------------------------------------- board */
+
+  function board(canvas, engine, opts) {
+    opts = opts || {};
+    var ctx = canvas.getContext('2d');
+    var cell = canvas.width / BOARD_W;
+    var w = canvas.width;
+    var h = canvas.height;
+
+    ctx.save();
+
+    // Screen shake, driven by the game layer.
+    if (opts.shake) {
+      var s = opts.shake;
+      ctx.translate((Math.random() - 0.5) * s, (Math.random() - 0.5) * s);
+    }
+
+    ctx.clearRect(-20, -20, w + 40, h + 40);
+    ctx.fillStyle = 'rgba(8,8,13,0.92)';
+    ctx.fillRect(-20, -20, w + 40, h + 40);
+
+    // The single buffer row sits above the field line and is drawn darker.
+    var fieldTop = (VISIBLE_ROWS - RENDER_FROM) * cell;
+    ctx.fillStyle = 'rgba(0,0,0,0.42)';
+    ctx.fillRect(0, 0, w, fieldTop);
+
+    if (opts.grid !== false) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.055)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (var gx = 1; gx < BOARD_W; gx++) {
+        ctx.moveTo(gx * cell + 0.5, 0);
+        ctx.lineTo(gx * cell + 0.5, h);
+      }
+      for (var gy = 1; gy < RENDER_ROWS; gy++) {
+        ctx.moveTo(0, gy * cell + 0.5);
+        ctx.lineTo(w, gy * cell + 0.5);
+      }
+      ctx.stroke();
+    }
+
+    // Danger tint once the stack climbs into the top third.
+    var height = stackHeight(engine);
+    if (height > 13) {
+      var intensity = Math.min(0.30, (height - 13) / 22);
+      var grad = ctx.createLinearGradient(0, 0, 0, h * 0.6);
+      grad.addColorStop(0, 'rgba(255,40,60,' + intensity + ')');
+      grad.addColorStop(1, 'rgba(255,40,60,0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h * 0.6);
+    }
+
+    // Locked cells.
+    for (var y = RENDER_FROM; y < BOARD_H; y++) {
+      var py = (y - RENDER_FROM) * cell;
+      for (var x = 0; x < BOARD_W; x++) {
+        var v = engine.cells[y * BOARD_W + x];
+        if (v) block(ctx, x * cell, py, cell, v, y < VISIBLE_ROWS ? 0.5 : 1);
+      }
+    }
+
+    if (engine.piece && engine.alive) {
+      var color = PIECES[engine.piece.type].color;
+
+      if (opts.ghost !== false) {
+        var gy2 = engine.ghostY();
+        var gcells = engine.pieceCells({
+          type: engine.piece.type, x: engine.piece.x, y: gy2, rotation: engine.piece.rotation
+        });
+        for (var i = 0; i < gcells.length; i++) {
+          if (gcells[i][1] < RENDER_FROM) continue;
+          ghostBlock(ctx, gcells[i][0] * cell, (gcells[i][1] - RENDER_FROM) * cell, cell, color);
+        }
+      }
+
+      var cells = engine.pieceCells();
+      for (var j = 0; j < cells.length; j++) {
+        if (cells[j][1] < RENDER_FROM) continue;
+        block(ctx, cells[j][0] * cell, (cells[j][1] - RENDER_FROM) * cell, cell, color,
+              cells[j][1] < VISIBLE_ROWS ? 0.55 : 1);
+      }
+    }
+
+    // Field boundary line.
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, fieldTop + 0.5);
+    ctx.lineTo(w, fieldTop + 0.5);
+    ctx.stroke();
+
+    // Line-clear flash.
+    if (opts.flash > 0) {
+      ctx.fillStyle = 'rgba(255,255,255,' + Math.min(0.5, opts.flash) + ')';
+      ctx.fillRect(0, 0, w, h);
+    }
+
+    ctx.restore();
+  }
+
+  function stackHeight(engine) {
+    for (var y = 0; y < BOARD_H; y++) {
+      for (var x = 0; x < BOARD_W; x++) {
+        if (engine.cells[y * BOARD_W + x]) return BOARD_H - y;
+      }
+    }
+    return 0;
+  }
+
+  /* -------------------------------------------------- next / hold boxes */
+
+  function pieceBounds(type, rotation) {
+    var cells = PIECES[type].cells[rotation || 0];
+    var minX = 9, maxX = -9, minY = 9, maxY = -9;
+    for (var i = 0; i < cells.length; i++) {
+      minX = Math.min(minX, cells[i][0]); maxX = Math.max(maxX, cells[i][0]);
+      minY = Math.min(minY, cells[i][1]); maxY = Math.max(maxY, cells[i][1]);
+    }
+    return { minX: minX, maxX: maxX, minY: minY, maxY: maxY, w: maxX - minX + 1, h: maxY - minY + 1 };
+  }
+
+  function pieceInBox(ctx, type, boxX, boxY, boxW, boxH, cell, alpha) {
+    var b = pieceBounds(type, 0);
+    var ox = boxX + (boxW - b.w * cell) / 2 - b.minX * cell;
+    var oy = boxY + (boxH - b.h * cell) / 2 - b.minY * cell;
+    var cells = PIECES[type].cells[0];
+    var color = PIECES[type].color;
+    for (var i = 0; i < cells.length; i++) {
+      block(ctx, ox + cells[i][0] * cell, oy + cells[i][1] * cell, cell, color, alpha);
+    }
+  }
+
+  function next(canvas, queue) {
+    var ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    var slots = Math.max(1, queue.length);
+    var slotH = canvas.height / slots;
+    var cell = Math.floor(Math.min(canvas.width / 5, slotH / 3.1));
+    for (var i = 0; i < queue.length; i++) {
+      pieceInBox(ctx, queue[i], 0, i * slotH, canvas.width, slotH, cell, i === 0 ? 1 : 0.82);
+    }
+  }
+
+  function hold(canvas, type, used) {
+    var ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!type) return;
+    var cell = Math.floor(Math.min(canvas.width / 5, canvas.height / 3.1));
+    pieceInBox(ctx, type, 0, 0, canvas.width, canvas.height, cell, used ? 0.32 : 1);
+  }
+
+  /* ------------------------------------------------------- opponent view */
+
+  /** Draws a remote player's board from the compact string in their state. */
+  function mini(canvas, boardString, piece) {
+    var ctx = canvas.getContext('2d');
+    var cell = canvas.width / BOARD_W;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(6,6,10,0.9)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (boardString && boardString.length >= VISIBLE_ROWS * BOARD_W) {
+      for (var y = 0; y < VISIBLE_ROWS; y++) {
+        for (var x = 0; x < BOARD_W; x++) {
+          var v = boardString.charCodeAt(y * BOARD_W + x) - 48;
+          if (v > 0) {
+            ctx.fillStyle = COLORS[v] || '#555';
+            ctx.fillRect(x * cell, y * cell, cell - 0.5, cell - 0.5);
+          }
+        }
+      }
+    }
+
+    if (piece && PIECES[piece.t]) {
+      var defs = PIECES[piece.t].cells[piece.r];
+      ctx.fillStyle = COLORS[PIECES[piece.t].color];
+      ctx.globalAlpha = 0.9;
+      for (var i = 0; i < defs.length; i++) {
+        var px = piece.x + defs[i][0];
+        var py = piece.y + defs[i][1] - VISIBLE_ROWS;
+        if (py < 0 || py >= VISIBLE_ROWS) continue;
+        ctx.fillRect(px * cell, py * cell, cell - 0.5, cell - 0.5);
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  return {
+    board: board, next: next, hold: hold, mini: mini,
+    stackHeight: stackHeight, colors: COLORS, pieceInBox: pieceInBox
+  };
+})();
+</script>

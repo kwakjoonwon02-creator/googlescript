@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <title><?= appName ?></title>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- media="print" keeps this off the critical path; onload promotes it. -->
+  <link rel="stylesheet" media="print" onload="this.media='all'"
+        href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;700&display=swap">
+  <?!= include('css'); ?>
+</head>
+<body>
+  <div id="bg-layer">
+    <div class="bg-grid"></div>
+    <div class="bg-glow"></div>
+    <div class="bg-stripes"></div>
+  </div>
+
+  <?!= include('ui'); ?>
+
+  <script>
+    window.APP_INFO = { name: <?= '"' + appName + '"' ?>, version: <?= '"' + appVersion + '"' ?> };
+  </script>
+  <?!= include('js_util'); ?>
+  <?!= include('js_engine'); ?>
+  <?!= include('js_attack'); ?>
+  <?!= include('js_render'); ?>
+  <?!= include('js_input'); ?>
+  <?!= include('js_ai'); ?>
+  <?!= include('js_net'); ?>
+  <?!= include('js_game'); ?>
+  <?!= include('js_app'); ?>
+</body>
+</html>

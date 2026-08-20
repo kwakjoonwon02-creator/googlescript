@@ -1,0 +1,178 @@
+<script>
+/* =============================================================== input ==
+   Key handling with proper DAS (delayed auto shift) and ARR (auto repeat
+   rate), which is what makes a Tetris game feel modern. ARR of 0 means the
+   piece slides to the wall in a single frame once DAS charges.
+   ========================================================================= */
+
+var DEFAULT_BINDS = {
+  left:      'ArrowLeft',
+  right:     'ArrowRight',
+  softDrop:  'ArrowDown',
+  hardDrop:  'Space',
+  rotateCW:  'ArrowUp',
+  rotateCCW: 'KeyZ',
+  rotate180: 'KeyA',
+  hold:      'KeyC',
+  retry:     'KeyR',
+  exit:      'Escape'
+};
+
+/* Extra keys that always work, regardless of what the player rebinds. */
+var ALIAS_BINDS = {
+  KeyX: 'rotateCW',
+  ControlLeft: 'rotateCCW',
+  ControlRight: 'rotateCCW',
+  ShiftLeft: 'hold',
+  ShiftRight: 'hold'
+};
+
+var BIND_LABELS = {
+  left: '왼쪽 이동', right: '오른쪽 이동', softDrop: '소프트 드롭', hardDrop: '하드 드롭',
+  rotateCW: '시계 방향 회전', rotateCCW: '반시계 방향 회전', rotate180: '180° 회전',
+  hold: '홀드', retry: '다시 시작', exit: '나가기'
+};
+
+var CONFIG = Object.assign({
+  das: 100,
+  arr: 0,
+  sdf: 41,
+  ghost: true,
+  grid: true,
+  shake: true,
+  sound: true,
+  cpuLevel: 3,
+  binds: Object.assign({}, DEFAULT_BINDS)
+}, U.load('config', {}));
+CONFIG.binds = Object.assign({}, DEFAULT_BINDS, CONFIG.binds || {});
+
+function saveConfig() { U.save('config', CONFIG); }
+
+var Input = (function () {
+  var handler = null;          // set by the game while a match is running
+  var down = {};               // action -> true
+  var dasTimer = 0;
+  var arrTimer = 0;
+  var moveDir = 0;             // -1 / 0 / +1, last pressed direction wins
+  var listening = null;        // {action, done} while rebinding
+  var enabled = false;
+
+  function actionFor(code) {
+    var binds = CONFIG.binds;
+    for (var action in binds) {
+      if (binds[action] === code) return action;
+    }
+    // Nothing claims this key, so a built-in alternate may take it.
+    return ALIAS_BINDS[code] || null;
+  }
+
+  function onKeyDown(e) {
+    if (listening) {
+      e.preventDefault();
+      var done = listening.done;
+      var action = listening.action;
+      listening = null;
+      if (e.code !== 'Escape') {
+        // Free the key from any action that already owns it.
+        Object.keys(CONFIG.binds).forEach(function (a) {
+          if (CONFIG.binds[a] === e.code) CONFIG.binds[a] = '';
+        });
+        CONFIG.binds[action] = e.code;
+        saveConfig();
+      }
+      done();
+      return;
+    }
+
+    if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+
+    var act = actionFor(e.code);
+    if (!act) return;
+    e.preventDefault();
+    if (e.repeat) return;
+    if (down[act]) return;
+    down[act] = true;
+
+    if (!enabled || !handler) {
+      if (act === 'exit' && handler) handler('exit');
+      return;
+    }
+
+    if (act === 'left' || act === 'right') {
+      moveDir = act === 'left' ? -1 : 1;
+      dasTimer = 0;
+      arrTimer = 0;
+      handler(act);
+    } else {
+      handler(act);
+    }
+  }
+
+  function onKeyUp(e) {
+    var act = actionFor(e.code);
+    if (!act) return;
+    down[act] = false;
+    if (act === 'left' && moveDir === -1) moveDir = down.right ? 1 : 0;
+    if (act === 'right' && moveDir === 1) moveDir = down.left ? -1 : 0;
+    if (moveDir !== 0) { dasTimer = 0; arrTimer = 0; }
+  }
+
+  function onBlur() {
+    down = {};
+    moveDir = 0;
+    dasTimer = 0;
+  }
+
+  /** Called every frame by the game loop; emits repeat moves. */
+  function update(dtMs) {
+    if (!enabled || !handler || moveDir === 0) return;
+    dasTimer += dtMs;
+    if (dasTimer < CONFIG.das) return;
+
+    if (CONFIG.arr <= 0) {
+      handler(moveDir < 0 ? 'dasLeft' : 'dasRight');
+      return;
+    }
+    arrTimer += dtMs;
+    while (arrTimer >= CONFIG.arr) {
+      arrTimer -= CONFIG.arr;
+      handler(moveDir < 0 ? 'left' : 'right');
+    }
+  }
+
+  function isDown(action) { return !!down[action]; }
+
+  function attach(fn) { handler = fn; }
+  function setEnabled(v) {
+    enabled = !!v;
+    if (!v) onBlur();
+  }
+
+  function startListening(action, done) {
+    listening = { action: action, done: done };
+  }
+
+  function keyLabel(code) {
+    if (!code) return '없음';
+    return code
+      .replace(/^Key/, '')
+      .replace(/^Digit/, '')
+      .replace('ArrowLeft', '←').replace('ArrowRight', '→')
+      .replace('ArrowUp', '↑').replace('ArrowDown', '↓')
+      .replace('Space', 'SPACE')
+      .replace('ControlLeft', 'L-CTRL').replace('ControlRight', 'R-CTRL')
+      .replace('ShiftLeft', 'L-SHIFT').replace('ShiftRight', 'R-SHIFT')
+      .replace('Escape', 'ESC');
+  }
+
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
+  window.addEventListener('blur', onBlur);
+
+  return {
+    attach: attach, update: update, setEnabled: setEnabled,
+    isDown: isDown, startListening: startListening, keyLabel: keyLabel,
+    labels: BIND_LABELS, defaults: DEFAULT_BINDS
+  };
+})();
+</script>

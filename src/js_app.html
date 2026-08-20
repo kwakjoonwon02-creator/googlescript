@@ -1,0 +1,686 @@
+<script>
+/* ================================================================== app ==
+   Screens, navigation, and everything that is not the game loop itself.
+   ========================================================================= */
+
+var App = (function () {
+
+  var current = 'boot';
+  var profile = null;
+  var queueTimer = null;
+  var queueStartedAt = 0;
+  var pendingRoomConfig = { ft: 3, maxPlayers: 2, isPrivate: false };
+  var lbTab = 'ranked';
+  var lbData = null;
+
+  /* ------------------------------------------------------------ screens */
+
+  function showScreen(name) {
+    U.$$('.screen').forEach(function (s) { s.classList.remove('active'); });
+    var node = U.$('#screen-' + name);
+    if (node) node.classList.add('active');
+    current = name;
+    if (name !== 'game') document.body.classList.remove('in-game');
+    if (name === 'game') document.body.classList.add('in-game');
+  }
+
+  function currentScreen() { return current; }
+
+  /* ------------------------------------------------------------ profile */
+
+  function updateProfile(p) {
+    if (!p) return;
+    profile = p;
+    U.$('#me-name').textContent = p.name;
+    U.$('#me-tr').textContent = Math.round(p.tr).toLocaleString();
+    U.$('#me-record').textContent = p.wins + 'W ' + p.losses + 'L';
+    U.paintRankBadge(U.$('#me-rank'), p.rank, p.rankColor);
+    U.$('#ranked-tr').textContent = Math.round(p.tr).toLocaleString();
+
+    U.$('#me-apm').textContent = U.fmtNum(p.apm, 1);
+    U.$('#me-pps').textContent = U.fmtNum(p.pps, 2);
+    U.$('#me-vs').textContent = U.fmtNum(p.vs, 1);
+    U.$('#me-sprint').textContent = p.sprintBest ? U.fmtTimeMs(p.sprintBest) : '—';
+    U.$('#me-blitz').textContent = p.blitzBest ? p.blitzBest.toLocaleString() : '—';
+    U.$('#me-peak').textContent = p.peakTr ? Math.round(p.peakTr).toLocaleString() : '—';
+
+    U.$('#solo-sprint-best').textContent = p.sprintBest ? U.fmtTimeMs(p.sprintBest) : '—';
+    U.$('#solo-blitz-best').textContent = p.blitzBest ? p.blitzBest.toLocaleString() : '—';
+
+    var placement = U.$('#me-placement');
+    if (p.placementsLeft > 0) {
+      placement.textContent = '배치 경기 ' + (10 - p.placementsLeft) + '/10 — ' +
+        p.placementsLeft + '경기 더 치르면 랭크가 부여됩니다.';
+    } else {
+      placement.textContent = '최고 랭크 ' + p.rank + ' · 연승 ' + Math.max(0, p.streak);
+    }
+
+    var nameField = U.$('#cfg-name');
+    if (nameField && document.activeElement !== nameField) nameField.value = p.name;
+  }
+
+  function refreshProfile() {
+    return Net.profile().then(function (data) {
+      updateProfile(data.profile);
+      renderHistory(data.history);
+      return data;
+    }).catch(function () {});
+  }
+
+  function renderHistory(history) {
+    var host = U.$('#recent-matches');
+    U.clear(host);
+    if (!history || !history.length) {
+      host.appendChild(U.el('p', { class: 'hint', text: '아직 기록이 없습니다.' }));
+      return;
+    }
+    history.forEach(function (m) {
+      var delta = m.trDelta;
+      host.appendChild(U.el('div', {
+        class: 'switch-row',
+        html:
+          '<div class="switch-label"><b style="color:' + (m.won ? 'var(--good)' : 'var(--bad)') + '">' +
+          (m.won ? 'WIN' : 'LOSS') + '</b> vs ' + U.escapeHtml(m.opponent) +
+          '<small>' + U.escapeHtml(m.score) + ' · ' + U.fmtAgo(m.ts) + '</small></div>' +
+          '<div class="mono ' + (delta >= 0 ? 'up' : 'down') + '">' +
+          (delta >= 0 ? '+' : '') + delta + '</div>'
+      }));
+    });
+  }
+
+  /* ---------------------------------------------------------- bootstrap */
+
+  function boot() {
+    U.$('#boot-status').textContent = '서버에 연결하는 중…';
+    Net.bootstrap().then(function (data) {
+      updateProfile(data.profile);
+      refreshProfile();
+      buildKeybindUI();
+      syncConfigUI();
+      if (data.isNew) {
+        showScreen('menu');
+        askName(true);
+      } else {
+        showScreen('menu');
+      }
+    }).catch(function (err) {
+      U.$('#boot-status').innerHTML = '연결 실패: ' + U.escapeHtml(err.message) +
+        '<br><br><button class="btn sm" onclick="location.reload()">다시 시도</button>';
+    });
+  }
+
+  function askName(isNew) {
+    var input = U.el('input', { class: 'input', maxlength: 16, value: profile ? profile.name : '' });
+    var msg = U.el('p', { class: 'hint', text: '2~16자 · 한글/영문/숫자/_-. 사용 가능' });
+    var save = U.el('button', { class: 'btn primary wide', text: '확인' });
+    var box = U.el('div', {}, [
+      U.el('div', { class: 'panel-title', text: isNew ? '닉네임을 정해주세요' : '닉네임 변경' }),
+      input, msg, U.el('div', { style: 'height:14px' }), save
+    ]);
+    if (!isNew) {
+      var cancel = U.el('button', { class: 'btn ghost wide', text: '취소', style: 'margin-top:8px' });
+      cancel.addEventListener('click', U.closeModal);
+      box.appendChild(cancel);
+    }
+    save.addEventListener('click', function () {
+      var value = input.value.trim();
+      save.disabled = true;
+      Net.setName(value).then(function (res) {
+        updateProfile(res.profile);
+        U.closeModal();
+        U.toast('닉네임이 설정되었습니다.', 'good');
+      }).catch(function (err) {
+        msg.textContent = err.message;
+        msg.style.color = 'var(--bad)';
+        save.disabled = false;
+      });
+    });
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') save.click();
+      e.stopPropagation();
+    });
+    U.modal(box);
+    setTimeout(function () { input.focus(); input.select(); }, 60);
+  }
+
+  /* --------------------------------------------------------------- menu */
+
+  function wireMenu() {
+    U.$$('[data-nav]').forEach(function (node) {
+      node.addEventListener('click', function () {
+        var target = node.getAttribute('data-nav');
+        if (target === 'menu') { showScreen('menu'); refreshProfile(); }
+        else if (target === 'solo') showScreen('solo');
+        else if (target === 'multi') { showScreen('multi'); loadRooms(); }
+        else if (target === 'ranked') startRanked();
+        else if (target === 'cpu') pickCpuLevel();
+        else if (target === 'leaderboard') openLeaderboard();
+      });
+    });
+
+    U.$$('[data-solo]').forEach(function (node) {
+      node.addEventListener('click', function () {
+        Game.startSolo(node.getAttribute('data-solo'));
+      });
+    });
+
+    U.$('#identity').addEventListener('click', function () { askName(false); });
+    U.$('#btn-config').addEventListener('click', function () { showScreen('config'); syncConfigUI(); });
+    U.$('#btn-about').addEventListener('click', showAbout);
+  }
+
+  function showAbout() {
+    U.modal(U.el('div', {
+      html:
+        '<div class="panel-title">TETRA.GS · v' + U.escapeHtml(window.APP_INFO.version) + '</div>' +
+        '<p class="hint" style="line-height:1.7">' +
+        'Google Apps Script 위에서 동작하는 테트리스입니다. 소켓을 쓸 수 없어 대전은 ' +
+        '약 0.3초 간격의 폴링으로 동기화되며, 두 클라이언트는 같은 시드로 동일한 7-bag을 생성합니다.<br><br>' +
+        '<b>레이팅</b> — Glicko-2로 계산하고 TR(0~25,000)로 표시합니다. 10경기를 치르면 ' +
+        '래더 백분위에 따라 D부터 X+까지의 랭크가 부여됩니다.<br><br>' +
+        '<b>조작</b> — ← → 이동 · ↓ 소프트드롭 · SPACE 하드드롭 · ↑/X 회전 · Z 역회전 · A 180° · C/SHIFT 홀드 · R 재시작 · ESC 나가기' +
+        '</p><div style="height:16px"></div>'
+    }, [U.el('button', { class: 'btn wide', text: '닫기', onclick: U.closeModal })]));
+  }
+
+  /* --------------------------------------------------------------- solo */
+
+  function pickCpuLevel() {
+    var box = U.el('div', {});
+    box.appendChild(U.el('div', { class: 'panel-title', text: 'CPU 난이도 선택' }));
+    AI.levels.forEach(function (lv, i) {
+      var btn = U.el('div', {
+        class: 'menu-item',
+        style: '--item-color:' + ['#46d17f', '#8fd14b', '#ffd24d', '#ff8a3d', '#ff4d6a'][i],
+        html: '<div class="menu-icon">' + (i + 1) + '</div>' +
+              '<div class="menu-text"><div class="menu-title" style="font-size:18px">' + lv.name + '</div>' +
+              '<div class="menu-desc">' + lv.pps.toFixed(2) + ' PPS 목표</div></div>'
+      });
+      btn.addEventListener('click', function () {
+        CONFIG.cpuLevel = i + 1;
+        saveConfig();
+        U.closeModal();
+        Game.startCpu(i + 1);
+      });
+      box.appendChild(btn);
+    });
+    box.appendChild(U.el('div', { style: 'height:12px' }));
+    box.appendChild(U.el('button', { class: 'btn ghost wide', text: '취소', onclick: U.closeModal }));
+    U.modal(box);
+  }
+
+  /* ------------------------------------------------------------- ranked */
+
+  var QUEUE_POLL_MS = 2200;
+
+  /**
+   * Join and poll return the same shape, and joining can pair you on the
+   * spot — so both go through here. Handling `matched` only on poll would
+   * strand whoever completes the pair, because the server has already taken
+   * their queue entry.
+   */
+  function handleQueueStatus(status) {
+    if (status.matched) {
+      stopQueue();
+      U.$('#queue-title').textContent = '매치 성사!';
+      enterRoom(status.room, true);
+      return true;
+    }
+    paintQueue(status);
+    return false;
+  }
+
+  function queueFailed(err) {
+    U.toast(err.message, 'error');
+    stopQueue();
+    showScreen('menu');
+  }
+
+  function startRanked() {
+    showScreen('queue');
+    queueStartedAt = Date.now();
+    U.$('#queue-title').textContent = '상대를 찾는 중…';
+    Net.queueJoin().then(function (status) {
+      if (handleQueueStatus(status)) return;
+      stopQueue();
+      queueTimer = setInterval(pollQueue, QUEUE_POLL_MS);
+    }).catch(queueFailed);
+  }
+
+  function pollQueue() {
+    Net.queuePoll().then(handleQueueStatus).catch(queueFailed);
+  }
+
+  function paintQueue(status) {
+    U.$('#queue-elapsed').textContent = ((Date.now() - queueStartedAt) / 1000).toFixed(1);
+    U.$('#queue-count').textContent = status.waiting || 0;
+    U.$('#queue-band').textContent = (status.band || 800).toLocaleString();
+  }
+
+  function stopQueue() {
+    if (queueTimer) clearInterval(queueTimer);
+    queueTimer = null;
+  }
+
+  /* ---------------------------------------------------------- multiplayer */
+
+  function wireMulti() {
+    U.$$('[data-step]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var key = btn.getAttribute('data-step');
+        var delta = Number(btn.getAttribute('data-delta'));
+        if (key === 'ft') {
+          pendingRoomConfig.ft = U.clamp(pendingRoomConfig.ft + delta, 1, 9);
+          U.$('#cfg-ft').textContent = pendingRoomConfig.ft;
+        } else if (key === 'max') {
+          pendingRoomConfig.maxPlayers = U.clamp(pendingRoomConfig.maxPlayers + delta, 2, 4);
+          U.$('#cfg-max').textContent = pendingRoomConfig.maxPlayers;
+        } else if (key === 'cpu') {
+          CONFIG.cpuLevel = U.clamp(CONFIG.cpuLevel + delta, 1, 5);
+          saveConfig();
+          syncConfigUI();
+        }
+      });
+    });
+
+    U.$('#cfg-private').addEventListener('click', function () {
+      pendingRoomConfig.isPrivate = !pendingRoomConfig.isPrivate;
+      this.textContent = pendingRoomConfig.isPrivate ? 'ON' : 'OFF';
+      this.classList.toggle('primary', pendingRoomConfig.isPrivate);
+    });
+
+    U.$('#btn-create-room').addEventListener('click', function () {
+      var btn = this;
+      btn.disabled = true;
+      Net.roomCreate(pendingRoomConfig).then(function (res) {
+        enterRoom(res.room, false);
+      }).catch(function (err) {
+        U.toast(err.message, 'error');
+      }).then(function () { btn.disabled = false; });
+    });
+
+    U.$('#btn-join-code').addEventListener('click', joinByCode);
+    U.$('#join-code').addEventListener('keydown', function (e) {
+      e.stopPropagation();
+      if (e.key === 'Enter') joinByCode();
+    });
+    U.$('#btn-refresh-rooms').addEventListener('click', loadRooms);
+    U.$('#btn-leave-room').addEventListener('click', function () {
+      Game.leave();
+      showScreen('multi');
+      loadRooms();
+    });
+    U.$('#btn-ready').addEventListener('click', function () {
+      Game.setReady(!Game.isReady());
+      paintReadyButton();
+    });
+    U.$('#room-code-big').addEventListener('click', function () {
+      var code = this.textContent;
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(code).then(function () { U.toast('코드를 복사했습니다.', 'good'); });
+      }
+    });
+  }
+
+  function joinByCode() {
+    var code = U.$('#join-code').value.trim().toUpperCase();
+    if (code.length < 3) { U.toast('코드를 입력하세요.', 'error'); return; }
+    Net.roomJoin(code).then(function (res) {
+      enterRoom(res.room, false);
+    }).catch(function (err) { U.toast(err.message, 'error'); });
+  }
+
+  function loadRooms() {
+    var host = U.$('#room-list');
+    U.clear(host);
+    host.appendChild(U.el('p', { class: 'hint', text: '불러오는 중…' }));
+    Net.roomList().then(function (res) {
+      U.clear(host);
+      if (!res.rooms.length) {
+        host.appendChild(U.el('p', { class: 'hint', text: '공개된 방이 없습니다. 직접 만들어 보세요.' }));
+        return;
+      }
+      res.rooms.forEach(function (r) {
+        var node = U.el('div', {
+          class: 'menu-item',
+          style: '--item-color:#b455e5',
+          html: '<div class="menu-icon">' + U.escapeHtml(r.code.slice(0, 2)) + '</div>' +
+                '<div class="menu-text"><div class="menu-title" style="font-size:18px">' +
+                U.escapeHtml(r.name) + '</div><div class="menu-desc">' +
+                'FT' + r.ft + ' · ' + (r.state === 'lobby' ? '대기 중' : '경기 중') + '</div></div>' +
+                '<div class="menu-meta">' + r.players + '/' + r.max + '</div>'
+        });
+        node.addEventListener('click', function () {
+          Net.roomJoin(r.code).then(function (res2) { enterRoom(res2.room, false); })
+            .catch(function (err) { U.toast(err.message, 'error'); });
+        });
+        host.appendChild(node);
+      });
+    }).catch(function (err) {
+      U.clear(host);
+      host.appendChild(U.el('p', { class: 'hint', text: '목록을 불러오지 못했습니다: ' + err.message }));
+    });
+  }
+
+  function enterRoom(room, autoReady) {
+    Game.startVersus(room);
+    Game.setReady(!!autoReady);
+    showScreen('room');
+    renderRoom(room, {}, !!autoReady);
+    U.$('#room-hint').textContent = autoReady
+      ? '상대가 준비되면 자동으로 시작합니다.'
+      : '모든 플레이어가 준비하면 시작합니다.';
+  }
+
+  function renderRoom(room, opponents, ready) {
+    U.$('#room-title').textContent = room.mode === 'ranked' ? 'Ranked Match' : 'Room';
+    U.$('#room-code-badge').textContent = room.code;
+    U.$('#room-code-big').textContent = room.code;
+    U.$('#room-mode-badge').textContent = room.mode === 'ranked' ? 'RANKED' : 'CASUAL';
+    U.$('#room-ft').textContent = room.config.ft;
+    U.$('#room-max').textContent = room.config.maxPlayers;
+    U.$('#room-ranked').textContent = room.mode === 'ranked' ? '예' : '아니오';
+    U.$('#room-count').textContent = '(' + room.players.length + '/' + room.config.maxPlayers + ')';
+
+    var host = U.$('#room-players');
+    U.clear(host);
+    var myId = Net.creds().id;
+    room.players.forEach(function (p) {
+      var isMe = p.id === myId;
+      var isReady = isMe ? ready : !!(opponents[p.id] && opponents[p.id].ready);
+      var badge = U.el('div', { class: 'rank-badge sm' });
+      U.paintRankBadge(badge, p.rank, p.rankColor);
+      host.appendChild(U.el('div', {
+        class: 'switch-row',
+        style: 'align-items:center'
+      }, [
+        badge,
+        U.el('div', {
+          class: 'switch-label grow',
+          html: '<b>' + U.escapeHtml(p.name) + (isMe ? ' <span class="badge">나</span>' : '') + '</b>' +
+                '<small>' + Math.round(p.tr).toLocaleString() + ' TR · ' + p.rank + '</small>'
+        }),
+        U.el('span', {
+          class: 'badge ' + (isReady ? 'live' : ''),
+          text: isReady ? 'READY' : 'WAITING'
+        })
+      ]));
+    });
+    paintReadyButton();
+  }
+
+  function paintReadyButton() {
+    var btn = U.$('#btn-ready');
+    var ready = Game.isReady();
+    btn.textContent = ready ? '준비 완료 — 취소하려면 클릭' : '준비';
+    btn.classList.toggle('primary', !ready);
+    btn.classList.toggle('danger', ready);
+  }
+
+  /* -------------------------------------------------------- leaderboard */
+
+  function openLeaderboard() {
+    showScreen('leaderboard');
+    var host = U.$('#lb-body');
+    U.clear(host);
+    host.appendChild(U.el('p', { class: 'hint', text: '불러오는 중…' }));
+    Net.leaderboard().then(function (data) {
+      lbData = data;
+      U.$('#lb-meta').textContent = '전체 ' + data.totalPlayers + '명 · 랭크 보유 ' + data.rankedPlayers + '명';
+      renderLeaderboard();
+    }).catch(function (err) {
+      U.clear(host);
+      host.appendChild(U.el('p', { class: 'hint', text: '불러오지 못했습니다: ' + err.message }));
+    });
+  }
+
+  function renderLeaderboard() {
+    var host = U.$('#lb-body');
+    U.clear(host);
+    if (!lbData) return;
+    var myId = Net.creds().id;
+
+    if (lbTab === 'ranked') {
+      if (!lbData.ranked.length) {
+        host.appendChild(U.el('p', { class: 'hint', text: '아직 랭크가 부여된 플레이어가 없습니다. 랭크 10경기를 완료해 보세요.' }));
+        return;
+      }
+      var rows = lbData.ranked.map(function (r) {
+        return '<tr class="' + (r.id === myId ? 'me ' : '') + 'top' + r.pos + '">' +
+          '<td class="pos">#' + r.pos + '</td>' +
+          '<td><span class="rank-badge xs" style="background:' + r.rankColor +
+          ';color:' + U.pickTextColor(r.rankColor) + ';display:inline-grid">' + r.rank + '</span></td>' +
+          '<td><b>' + U.escapeHtml(r.name) + '</b></td>' +
+          '<td class="num">' + r.tr.toLocaleString() + '</td>' +
+          '<td class="num">' + r.wins + 'W ' + r.losses + 'L</td>' +
+          '<td class="num">' + U.fmtNum(r.apm, 1) + '</td>' +
+          '<td class="num">' + U.fmtNum(r.pps, 2) + '</td></tr>';
+      }).join('');
+      host.innerHTML = '<table class="table"><thead><tr>' +
+        '<th>#</th><th>RANK</th><th>PLAYER</th><th class="num">TR</th>' +
+        '<th class="num">W/L</th><th class="num">APM</th><th class="num">PPS</th>' +
+        '</tr></thead><tbody>' + rows + '</tbody></table>';
+      return;
+    }
+
+    var list = lbTab === 'sprint' ? lbData.sprint : lbData.blitz;
+    if (!list.length) {
+      host.appendChild(U.el('p', { class: 'hint', text: '아직 기록이 없습니다.' }));
+      return;
+    }
+    var body = list.map(function (r) {
+      var value = lbTab === 'sprint' ? U.fmtTimeMs(r.value) : r.value.toLocaleString();
+      return '<tr class="' + (r.id === myId ? 'me ' : '') + 'top' + r.pos + '">' +
+        '<td class="pos">#' + r.pos + '</td><td><b>' + U.escapeHtml(r.name) + '</b></td>' +
+        '<td class="num">' + value + '</td></tr>';
+    }).join('');
+    host.innerHTML = '<table class="table"><thead><tr><th>#</th><th>PLAYER</th>' +
+      '<th class="num">' + (lbTab === 'sprint' ? 'TIME' : 'SCORE') + '</th></tr></thead><tbody>' +
+      body + '</tbody></table>';
+  }
+
+  function wireLeaderboard() {
+    U.$$('[data-lb]').forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        U.$$('[data-lb]').forEach(function (t) { t.classList.remove('active'); });
+        tab.classList.add('active');
+        lbTab = tab.getAttribute('data-lb');
+        renderLeaderboard();
+      });
+    });
+  }
+
+  /* ------------------------------------------------------------- config */
+
+  function syncConfigUI() {
+    U.$('#h-das').textContent = CONFIG.das;
+    U.$('#h-arr').textContent = CONFIG.arr;
+    U.$('#h-sdf').textContent = CONFIG.sdf >= 41 ? '∞' : CONFIG.sdf;
+    U.$('#cfg-cpu').textContent = CONFIG.cpuLevel;
+    U.$('#cfg-cpu-desc').textContent = AI.levels[CONFIG.cpuLevel - 1].name;
+    U.$('#cfg-ft').textContent = pendingRoomConfig.ft;
+    U.$('#cfg-max').textContent = pendingRoomConfig.maxPlayers;
+
+    ['ghost', 'grid', 'shake', 'sound'].forEach(function (key) {
+      var btn = U.$('[data-toggle="' + key + '"]');
+      if (!btn) return;
+      btn.textContent = CONFIG[key] ? 'ON' : 'OFF';
+      btn.classList.toggle('primary', !!CONFIG[key]);
+    });
+  }
+
+  function wireConfig() {
+    U.$$('[data-handling]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var key = btn.getAttribute('data-handling');
+        var delta = Number(btn.getAttribute('data-delta'));
+        if (key === 'das') CONFIG.das = U.clamp(CONFIG.das + delta, 0, 300);
+        if (key === 'arr') CONFIG.arr = U.clamp(CONFIG.arr + delta, 0, 100);
+        if (key === 'sdf') CONFIG.sdf = U.clamp(CONFIG.sdf + delta, 1, 41);
+        saveConfig();
+        syncConfigUI();
+      });
+    });
+
+    U.$$('[data-toggle]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var key = btn.getAttribute('data-toggle');
+        CONFIG[key] = !CONFIG[key];
+        saveConfig();
+        syncConfigUI();
+      });
+    });
+
+    U.$('#btn-reset-config').addEventListener('click', function () {
+      CONFIG.das = 100; CONFIG.arr = 0; CONFIG.sdf = 41;
+      CONFIG.ghost = true; CONFIG.grid = true; CONFIG.shake = true; CONFIG.sound = true;
+      CONFIG.binds = Object.assign({}, Input.defaults);
+      saveConfig();
+      syncConfigUI();
+      buildKeybindUI();
+      U.toast('설정을 기본값으로 되돌렸습니다.', 'good');
+    });
+
+    U.$('#btn-save-name').addEventListener('click', function () {
+      var value = U.$('#cfg-name').value.trim();
+      Net.setName(value).then(function (res) {
+        updateProfile(res.profile);
+        U.toast('닉네임이 변경되었습니다.', 'good');
+      }).catch(function (err) { U.toast(err.message, 'error'); });
+    });
+    U.$('#cfg-name').addEventListener('keydown', function (e) { e.stopPropagation(); });
+  }
+
+  function buildKeybindUI() {
+    var host = U.$('#keybinds');
+    U.clear(host);
+    Object.keys(Input.labels).forEach(function (action) {
+      var key = U.el('span', { class: 'kbd', text: Input.keyLabel(CONFIG.binds[action]) });
+      key.addEventListener('click', function () {
+        key.classList.add('listening');
+        key.textContent = '키 입력…';
+        Input.startListening(action, function () {
+          key.classList.remove('listening');
+          key.textContent = Input.keyLabel(CONFIG.binds[action]);
+          buildKeybindUI();
+        });
+      });
+      host.appendChild(U.el('div', { class: 'keybind-row' }, [
+        U.el('span', { text: Input.labels[action] }), key
+      ]));
+    });
+  }
+
+  /* ------------------------------------------------------------- result */
+
+  function wireResult() {
+    U.$('#btn-result-menu').addEventListener('click', exitToMenu);
+    U.$('#btn-result-again').addEventListener('click', function () {
+      var r = Game.result();
+      if (!r) { exitToMenu(); return; }
+      if (r.kind === 'solo') Game.startSolo(r.mode);
+      else if (r.kind === 'cpu') Game.startCpu(CONFIG.cpuLevel);
+      else if (r.kind === 'versus') {
+        if (r.ranked) {
+          Game.leave();
+          startRanked();
+        } else {
+          // The room is still alive; ready up and wait for the opponent.
+          Game.setReady(true);
+          showScreen('room');
+          U.toast('상대가 다시 하기를 누르면 시작합니다.');
+        }
+      }
+    });
+  }
+
+  /* --------------------------------------------------------------- exit */
+
+  function requestExit() {
+    if (current === 'game') {
+      if (Game.state().isOnline) {
+        confirmForfeit();
+      } else {
+        exitToMenu();
+      }
+    } else if (current === 'queue') {
+      cancelQueue();
+    } else if (current === 'room') {
+      Game.leave();
+      showScreen('multi');
+      loadRooms();
+    } else if (current !== 'menu' && current !== 'boot') {
+      showScreen('menu');
+    }
+  }
+
+  /** Walking out of a live match hands the round to the opponent, so ask. */
+  function confirmForfeit() {
+    var playing = Game.state().phase === 'playing';
+    var box = U.el('div', {}, [
+      U.el('div', { class: 'panel-title', text: playing ? '경기를 기권할까요?' : '방에서 나갈까요?' }),
+      U.el('p', {
+        class: 'hint',
+        text: playing
+          ? '지금 나가면 남은 라운드는 상대의 승리로 처리됩니다.'
+          : '방을 나가면 대기 중인 상대와의 연결이 끊어집니다.'
+      }),
+      U.el('div', { style: 'height:16px' })
+    ]);
+    var leaveBtn = U.el('button', { class: 'btn danger wide', text: '나가기' });
+    leaveBtn.addEventListener('click', function () {
+      U.closeModal();
+      exitToMenu();
+    });
+    var stayBtn = U.el('button', { class: 'btn ghost wide', text: '계속하기', style: 'margin-top:8px' });
+    stayBtn.addEventListener('click', U.closeModal);
+    box.appendChild(leaveBtn);
+    box.appendChild(stayBtn);
+    U.modal(box);
+  }
+
+  function cancelQueue() {
+    stopQueue();
+    Net.queueLeave().catch(function () {});
+    showScreen('menu');
+  }
+
+  function exitToMenu() {
+    stopQueue();
+    Game.leave();
+    showScreen('menu');
+    refreshProfile();
+  }
+
+  /* --------------------------------------------------------------- init */
+
+  function init() {
+    wireMenu();
+    wireMulti();
+    wireLeaderboard();
+    wireConfig();
+    wireResult();
+    U.$('#btn-cancel-queue').addEventListener('click', cancelQueue);
+    boot();
+  }
+
+  return {
+    init: init,
+    showScreen: showScreen,
+    currentScreen: currentScreen,
+    profile: function () { return profile; },
+    updateProfile: updateProfile,
+    refreshProfile: refreshProfile,
+    renderRoom: renderRoom,
+    requestExit: requestExit,
+    exitToMenu: exitToMenu
+  };
+})();
+
+(function bootOnce() {
+  var started = false;
+  function go() { if (started) return; started = true; App.init(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', go);
+  else go();
+})();
+</script>

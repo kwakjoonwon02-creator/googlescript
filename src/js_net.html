@@ -1,0 +1,119 @@
+<script>
+/* ================================================================== net ==
+   Promise wrapper around google.script.run, plus the credential handling.
+
+   Apps Script round trips are ~150-500ms, so the versus loop sends one
+   combined sync() per tick rather than several small calls, and never lets
+   two syncs overlap.
+   ========================================================================= */
+
+var Net = (function () {
+  var creds = U.load('creds', null);
+  var serverOffset = 0;        // serverTime - Date.now(), for the countdown
+  var lastLatency = 0;
+
+  function available() {
+    return typeof google !== 'undefined' && google.script && google.script.run;
+  }
+
+  function call(method, payload) {
+    return new Promise(function (resolve, reject) {
+      if (!available()) {
+        reject(new Error('Apps Script 런타임에 연결할 수 없습니다. 웹앱 URL로 접속했는지 확인하세요.'));
+        return;
+      }
+      var started = Date.now();
+      google.script.run
+        .withSuccessHandler(function (res) {
+          lastLatency = Date.now() - started;
+          if (!res) { reject(new Error('빈 응답')); return; }
+          if (res.ok === false) { reject(new Error(res.error || '알 수 없는 오류')); return; }
+          if (res.t) serverOffset = res.t - Date.now() + Math.floor(lastLatency / 2);
+          resolve(res.data);
+        })
+        .withFailureHandler(function (err) {
+          lastLatency = Date.now() - started;
+          reject(new Error((err && err.message) || String(err)));
+        })
+        .rpc(method, payload || {});
+    });
+  }
+
+  /** Retries transient failures with a short backoff. */
+  function callRetry(method, payload, attempts) {
+    var max = attempts === undefined ? 3 : attempts;
+    return call(method, payload).catch(function (err) {
+      if (max <= 1) throw err;
+      var wait = (4 - max) * 600 + 400;
+      return new Promise(function (r) { setTimeout(r, wait); })
+        .then(function () { return callRetry(method, payload, max - 1); });
+    });
+  }
+
+  function authed(payload) {
+    return Object.assign({ id: creds && creds.id, token: creds && creds.token }, payload || {});
+  }
+
+  function bootstrap(name) {
+    return call('bootstrap', {
+      id: creds && creds.id,
+      token: creds && creds.token,
+      name: name
+    }).then(function (data) {
+      creds = data.credentials;
+      U.save('creds', creds);
+      serverOffset = data.server.time - Date.now();
+      window.RANK_COLORS = {};
+      data.ranks.ladder.forEach(function (r) { window.RANK_COLORS[r.name] = r.color; });
+      window.RANK_COLORS[data.ranks.unranked.name] = data.ranks.unranked.color;
+      window.RANK_TABLE = data.ranks;
+      return data;
+    });
+  }
+
+  /* ---------------------------------------------------------- sync loop */
+
+  var syncInFlight = false;
+
+  /**
+   * One versus tick. Silently drops the call if the previous one has not
+   * come back yet, so a slow round trip cannot pile up requests.
+   */
+  function sync(code, state) {
+    if (syncInFlight) return Promise.resolve(null);
+    syncInFlight = true;
+    return call('sync', authed({ code: code, state: state }))
+      .then(function (data) { syncInFlight = false; return data; })
+      .catch(function (err) { syncInFlight = false; throw err; });
+  }
+
+  function resetSyncGate() { syncInFlight = false; }
+
+  function serverNow() { return Date.now() + serverOffset; }
+
+  return {
+    available: available,
+    call: call,
+    callRetry: callRetry,
+    authed: authed,
+    bootstrap: bootstrap,
+    sync: sync,
+    resetSyncGate: resetSyncGate,
+    serverNow: serverNow,
+    latency: function () { return lastLatency; },
+    creds: function () { return creds; },
+    setName: function (name) { return call('setName', authed({ name: name })); },
+    profile: function () { return call('profile', authed({})); },
+    leaderboard: function () { return call('leaderboard', authed({ limit: 100 })); },
+    submitSolo: function (payload) { return call('submitSolo', authed(payload)); },
+    queueJoin: function () { return call('queueJoin', authed({})); },
+    queuePoll: function () { return call('queuePoll', authed({})); },
+    queueLeave: function () { return call('queueLeave', authed({})); },
+    roomCreate: function (config) { return call('roomCreate', authed({ config: config })); },
+    roomJoin: function (code) { return call('roomJoin', authed({ code: code })); },
+    roomLeave: function (code) { return call('roomLeave', authed({ code: code })); },
+    roomList: function () { return call('roomList', authed({})); },
+    roomConfig: function (code, config) { return call('roomConfig', authed({ code: code, config: config })); }
+  };
+})();
+</script>

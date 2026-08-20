@@ -1,0 +1,971 @@
+<script>
+/* ================================================================= game ==
+   Owns the frame loop, the per-mode rules, the HUD, and the versus match
+   flow (both online rooms and the local CPU match, which share the same
+   round structure).
+   ========================================================================= */
+
+var Game = (function () {
+
+  var SYNC_INTERVAL = 320;      // ms between sync() calls while in a room
+  var LOBBY_SYNC_INTERVAL = 900;
+
+  var G = {
+    mode: null,
+    phase: 'idle',              // idle | countdown | playing | roundover | matchover
+    engine: null,
+    running: false,
+    raf: null,
+    lastFrame: 0,
+
+    // versus
+    room: null,
+    roomCode: null,
+    isOnline: false,
+    opponents: {},              // id -> view model
+    myAttackLog: [],
+    attackSeq: 0,
+    applied: {},                // opponentId -> highest applied attack index
+    lastSyncAt: 0,
+    syncErrors: 0,
+
+    // cpu
+    ai: null,
+    aiEngine: null,
+    aiAttackLog: [],
+    localScores: null,
+    localRound: 0,
+    localPhaseUntil: 0,
+
+    // stats aggregated across every round of the current match
+    matchAgg: null,
+    foldedRound: -1,
+
+    // fx
+    shake: 0,
+    flash: 0,
+    startedAt: 0,
+    countdownShown: -1,
+    result: null
+  };
+
+  /* --------------------------------------------------- match statistics */
+
+  /**
+   * A best-of match is several engines in a row, so the result screen would
+   * otherwise only ever show the final round. These fold each finished round
+   * into a running total.
+   */
+  function resetMatchAgg() {
+    G.matchAgg = {
+      lines: 0, pieces: 0, attack: 0, received: 0, elapsed: 0,
+      quads: 0, tspins: 0, perfectClears: 0, maxB2B: 0, maxCombo: 0
+    };
+    G.foldedRound = -1;
+  }
+
+  function roundKey() { return G.isOnline ? G.currentRound : G.localRound; }
+
+  function foldRoundStats() {
+    var e = G.engine;
+    if (!e || !G.matchAgg) return;
+    if (G.foldedRound === roundKey()) return;
+    G.foldedRound = roundKey();
+    var a = G.matchAgg;
+    a.lines += e.stats.lines;
+    a.pieces += e.stats.pieces;
+    a.attack += e.stats.attack;
+    a.received += e.stats.received;
+    a.elapsed += e.elapsed;
+    a.quads += e.stats.quads;
+    a.tspins += e.stats.tspins;
+    a.perfectClears += e.stats.perfectClears;
+    a.maxB2B = Math.max(a.maxB2B, e.stats.maxB2B);
+    a.maxCombo = Math.max(a.maxCombo, e.stats.maxCombo);
+  }
+
+  /** Totals for the whole match, including the round still in progress. */
+  function matchStats() {
+    var a = G.matchAgg || {
+      lines: 0, pieces: 0, attack: 0, received: 0, elapsed: 0,
+      quads: 0, tspins: 0, perfectClears: 0, maxB2B: 0, maxCombo: 0
+    };
+    var e = G.engine;
+    var live = (e && G.foldedRound !== roundKey()) ? e : null;
+
+    var lines = a.lines + (live ? live.stats.lines : 0);
+    var pieces = a.pieces + (live ? live.stats.pieces : 0);
+    var attack = a.attack + (live ? live.stats.attack : 0);
+    var received = a.received + (live ? live.stats.received : 0);
+    var elapsed = a.elapsed + (live ? live.elapsed : 0);
+
+    var minutes = elapsed / 60000;
+    var seconds = elapsed / 1000;
+    return {
+      apm: minutes > 0 ? attack / minutes : 0,
+      pps: seconds > 0 ? pieces / seconds : 0,
+      vs: minutes > 0 ? (attack + received) / minutes : 0,
+      lines: lines,
+      pieces: pieces,
+      attack: attack,
+      quads: a.quads + (live ? live.stats.quads : 0),
+      tspins: a.tspins + (live ? live.stats.tspins : 0),
+      maxB2B: Math.max(a.maxB2B, live ? live.stats.maxB2B : 0),
+      maxCombo: Math.max(a.maxCombo, live ? live.stats.maxCombo : 0)
+    };
+  }
+
+  /* ------------------------------------------------------------- rules */
+
+  function rulesFor(mode, roomConfig) {
+    var base = {
+      gravity: 1.0,
+      lockDelay: 500,
+      lockResets: 15,
+      nextCount: 5,
+      allowHold: true,
+      garbageDelay: (roomConfig && roomConfig.garbageDelayMs) || 500,
+      garbageCap: (roomConfig && roomConfig.garbageCap) || 8,
+      garbageMultiplier: (roomConfig && roomConfig.garbageMultiplier) || 1
+    };
+    if (mode === 'sprint') return Object.assign(base, { gravity: 1.0 });
+    if (mode === 'blitz') return Object.assign(base, { gravity: 1.0 });
+    if (mode === 'zen') return Object.assign(base, { gravity: 0.7, infiniteMode: true });
+    // versus / cpu: gravity creeps up so rounds cannot stall forever
+    return Object.assign(base, { gravity: 1.0, gravityIncrease: 0.45, gravityEvery: 30000 });
+  }
+
+  var MODE_GOALS = {
+    sprint: { lines: 40 },
+    blitz: { timeMs: 120000 }
+  };
+
+  /* ------------------------------------------------------------ engine */
+
+  function makeEngine(mode, seed, roomConfig) {
+    var engine = new Engine({ seed: seed, rules: rulesFor(mode, roomConfig) });
+    wireEngine(engine);
+    return engine;
+  }
+
+  function wireEngine(engine) {
+    engine.on('lock', function (ev) {
+      if (ev.lines > 0) {
+        G.flash = Math.min(0.45, 0.12 + ev.lines * 0.07);
+        if (CONFIG.shake) G.shake = Math.min(11, 2 + ev.lines * 1.7);
+        showClearPopups(ev);
+        U.beep(320 + ev.lines * 90, 90, 'square', 0.045);
+      } else {
+        U.beep(150, 32, 'sine', 0.025);
+      }
+      if (G.mode === 'blitz') {
+        var level = Math.floor(engine.stats.lines / 10) + 1;
+        if (level !== engine.level) {
+          engine.level = level;
+          engine.currentGravity = 1.0 + (level - 1) * 0.55;
+          popup('LEVEL ' + level, 'b2b');
+        }
+      }
+    });
+    engine.on('garbage', function (ev) {
+      if (CONFIG.shake) G.shake = Math.min(14, G.shake + ev.amount * 1.4);
+      U.beep(110, 120, 'sawtooth', 0.05);
+    });
+    engine.on('rotate', function () { U.beep(520, 22, 'sine', 0.02); });
+    engine.on('hold', function () { U.beep(660, 40, 'triangle', 0.03); });
+    engine.on('topout', function () { U.beep(90, 420, 'sawtooth', 0.07); });
+  }
+
+  /* -------------------------------------------------------------- start */
+
+  function startSolo(mode) {
+    stop();
+    G.mode = mode;
+    G.isOnline = false;
+    G.room = null;
+    G.opponents = {};
+    G.engine = makeEngine(mode, (Math.random() * 2147483647) | 0);
+    G.phase = 'countdown';
+    G.startedAt = 0;
+    G.countdownShown = -1;
+    G.localPhaseUntil = performance.now() + 2400;
+    layoutForMode();
+    App.showScreen('game');
+    run();
+  }
+
+  function startCpu(level) {
+    stop();
+    // Drop the previous game's engine first: the round folding below must not
+    // pick up stats from the match that just ended.
+    G.engine = null;
+    G.mode = 'cpu';
+    G.isOnline = false;
+    G.room = null;
+    G.localScores = { me: 0, cpu: 0 };
+    G.localRound = 0;
+    G.opponents = {};
+    resetMatchAgg();
+    layoutForMode();
+    App.showScreen('game');
+    beginLocalRound(level);
+    run();
+  }
+
+  function beginLocalRound(level) {
+    foldRoundStats();
+    var seed = (Math.random() * 2147483647) | 0;
+    G.aiLevel = level || G.aiLevel || CONFIG.cpuLevel;
+    G.engine = makeEngine('cpu', seed);
+    G.aiEngine = new Engine({ seed: seed ^ 0x5bf03635, rules: rulesFor('cpu') });
+    G.ai = new AI.Controller(G.aiEngine, G.aiLevel);
+    G.myAttackLog = [];
+    G.aiAttackLog = [];
+    G.localRound++;
+    G.phase = 'countdown';
+    G.startedAt = 0;
+    G.countdownShown = -1;
+    G.localPhaseUntil = performance.now() + 3000;
+    renderOpponentShells([{ id: 'cpu', name: 'CPU LV.' + G.aiLevel, rank: 'Z', rankColor: '#666B7A' }]);
+    updateScoreStrip();
+  }
+
+  /** Entering an online room (ranked or custom). */
+  function startVersus(room) {
+    stop();
+    G.mode = 'versus';
+    G.isOnline = true;
+    G.room = room;
+    G.roomCode = room.code;
+    G.opponents = {};
+    G.applied = {};
+    G.myAttackLog = [];
+    G.attackSeq = 0;
+    G.phase = 'lobby';
+    G.ready = false;
+    G.currentRound = 0;
+    resetMatchAgg();
+    G.engine = makeEngine('versus', room.seed || 1, room.config);
+    G.engine.alive = false;              // not playing until the round starts
+    G.lastSyncAt = 0;
+    G.syncErrors = 0;
+    Net.resetSyncGate();
+    layoutForMode();
+    run();
+  }
+
+  function run() {
+    if (G.running) return;
+    G.running = true;
+    G.lastFrame = performance.now();
+    Input.attach(handleAction);
+    Input.setEnabled(true);
+    document.body.classList.add('in-game');
+    G.raf = requestAnimationFrame(frame);
+  }
+
+  function stop() {
+    G.running = false;
+    if (G.raf) cancelAnimationFrame(G.raf);
+    G.raf = null;
+    Input.setEnabled(false);
+    document.body.classList.remove('in-game');
+  }
+
+  /**
+   * Hands control back to the UI without killing the loop. Online matches use
+   * this at the end: the room is still live, and it only stays live while we
+   * keep syncing, so a rematch is still possible from the result screen.
+   */
+  function pause() {
+    Input.setEnabled(false);
+  }
+
+  function leave() {
+    var code = G.roomCode;
+    stop();
+    G.phase = 'idle';
+    G.isOnline = false;
+    G.room = null;
+    G.roomCode = null;
+    if (code) Net.roomLeave(code).catch(function () {});
+  }
+
+  /* --------------------------------------------------------------- loop */
+
+  function frame(now) {
+    if (!G.running) return;
+    var dt = Math.min(80, now - G.lastFrame);
+    G.lastFrame = now;
+
+    Input.update(dt);
+
+    if (G.phase === 'playing' && G.engine && G.engine.alive) {
+      var sdf = Input.isDown('softDrop') ? CONFIG.sdf : 1;
+      G.engine.tick(dt, sdf);
+      collectMyAttacks();
+      checkSoloGoal();
+    }
+
+    if (G.mode === 'cpu') updateLocalMatch(dt, now);
+    if (G.isOnline) maybeSync(now);
+    if (!G.isOnline && (G.phase === 'countdown')) updateLocalCountdown(now);
+
+    G.shake *= Math.pow(0.86, dt / 16.67);
+    G.flash *= Math.pow(0.80, dt / 16.67);
+    if (G.shake < 0.15) G.shake = 0;
+    if (G.flash < 0.01) G.flash = 0;
+
+    draw();
+    updateHud();
+
+    G.raf = requestAnimationFrame(frame);
+  }
+
+  /* ------------------------------------------------------------ actions */
+
+  function handleAction(action) {
+    if (action === 'exit') {
+      App.requestExit();
+      return;
+    }
+    if (!G.engine || G.phase !== 'playing' || !G.engine.alive) {
+      if (action === 'retry' && !G.isOnline && G.mode !== 'cpu') startSolo(G.mode);
+      return;
+    }
+    var e = G.engine;
+    switch (action) {
+      case 'left': e.move(-1); break;
+      case 'right': e.move(1); break;
+      case 'dasLeft': while (e.move(-1)) {} break;
+      case 'dasRight': while (e.move(1)) {} break;
+      case 'hardDrop': e.hardDrop(); collectMyAttacks(); break;
+      case 'rotateCW': e.rotate(1); break;
+      case 'rotateCCW': e.rotate(-1); break;
+      case 'rotate180': e.rotate(2); break;
+      case 'hold': e.holdPiece(); break;
+      case 'softDrop': break;   // handled by the gravity multiplier
+      case 'retry':
+        if (!G.isOnline && G.mode !== 'cpu') startSolo(G.mode);
+        break;
+    }
+  }
+
+  /* ------------------------------------------------------- solo goals */
+
+  function checkSoloGoal() {
+    var e = G.engine;
+    if (G.mode === 'sprint') {
+      if (e.stats.lines >= MODE_GOALS.sprint.lines) finishSolo(true);
+      else if (!e.alive) finishSolo(false);
+    } else if (G.mode === 'blitz') {
+      if (e.elapsed >= MODE_GOALS.blitz.timeMs) finishSolo(true);
+      else if (!e.alive) finishSolo(false);
+    } else if (G.mode === 'zen') {
+      if (!e.alive) finishSolo(false);
+    }
+  }
+
+  function finishSolo(completed) {
+    if (G.phase !== 'playing') return;
+    G.phase = 'matchover';
+    var e = G.engine;
+    var rates = e.rates();
+    var payload = {
+      mode: G.mode,
+      completed: completed,
+      timeMs: e.elapsed,
+      score: e.score,
+      stats: {
+        lines: e.stats.lines, pieces: e.stats.pieces,
+        apm: rates.apm, pps: rates.pps, vs: rates.vs,
+        quads: e.stats.quads, tspins: e.stats.tspins,
+        perfectClears: e.stats.perfectClears, maxCombo: e.stats.maxCombo,
+        maxB2B: e.stats.maxB2B
+      }
+    };
+    Net.submitSolo(payload).then(function (res) {
+      App.updateProfile(res.profile);
+      showSoloResult(payload, res.improved);
+    }).catch(function () {
+      showSoloResult(payload, false);
+    });
+  }
+
+  /* ------------------------------------------------ local (CPU) match */
+
+  function updateLocalMatch(dt, now) {
+    if (G.phase === 'playing') {
+      if (G.ai) G.ai.update(dt);
+
+      // Route attacks in both directions.
+      var mine = G.engine.drainOutbox();
+      if (mine.length && G.aiEngine) {
+        mine.forEach(function (a) { G.aiEngine.receiveGarbage(a.n, 'me'); });
+      }
+      var theirs = G.aiEngine ? G.aiEngine.drainOutbox() : [];
+      if (theirs.length) {
+        theirs.forEach(function (a) { G.engine.receiveGarbage(a.n, 'cpu'); });
+      }
+
+      if (!G.engine.alive || !G.aiEngine.alive) endLocalRound();
+    } else if (G.phase === 'roundover' && now >= G.localPhaseUntil) {
+      beginLocalRound();
+    }
+  }
+
+  function endLocalRound() {
+    var iWon = G.engine.alive && !G.aiEngine.alive;
+    if (iWon) G.localScores.me++; else G.localScores.cpu++;
+    updateScoreStrip();
+
+    var ft = 3;
+    if (G.localScores.me >= ft || G.localScores.cpu >= ft) {
+      G.phase = 'matchover';
+      showCpuResult(G.localScores.me >= ft);
+    } else {
+      G.phase = 'roundover';
+      G.localPhaseUntil = performance.now() + 2600;
+      banner(iWon ? 'ROUND WIN' : 'ROUND LOSS',
+             G.localScores.me + ' — ' + G.localScores.cpu);
+    }
+  }
+
+  function updateLocalCountdown(now) {
+    var remain = G.localPhaseUntil - now;
+    if (remain <= 0) {
+      G.phase = 'playing';
+      G.startedAt = now;
+      clearOverlay();
+      return;
+    }
+    var n = Math.ceil(remain / 1000);
+    if (n !== G.countdownShown) {
+      G.countdownShown = n;
+      overlay('<div class="countdown">' + (n <= 0 ? 'GO' : n) + '</div>');
+      U.beep(n <= 1 ? 880 : 440, 90, 'sine', 0.05);
+    }
+  }
+
+  /* ------------------------------------------------- online match sync */
+
+  function collectMyAttacks() {
+    if (!G.engine) return;
+    var out = G.engine.drainOutbox();
+    if (!out.length) return;
+    if (G.mode === 'cpu') return;    // handled by updateLocalMatch
+    out.forEach(function (a) {
+      // The round is stamped on every event: indices restart each round, so
+      // without it a log that has not been refreshed yet would be replayed
+      // as phantom garbage at the start of the next one.
+      G.myAttackLog.push({ i: a.i, n: a.n, t: a.t, to: pickTarget(), r: G.currentRound });
+    });
+    if (G.myAttackLog.length > 24) G.myAttackLog = G.myAttackLog.slice(-24);
+  }
+
+  /** Random living opponent; in 1v1 this is always the same person. */
+  function pickTarget() {
+    var ids = Object.keys(G.opponents).filter(function (id) {
+      var o = G.opponents[id];
+      return o && o.connected && o.alive !== false;
+    });
+    if (!ids.length) return null;
+    return ids[Math.floor(Math.random() * ids.length)];
+  }
+
+  function maybeSync(now) {
+    var interval = G.phase === 'playing' ? SYNC_INTERVAL : LOBBY_SYNC_INTERVAL;
+    if (now - G.lastSyncAt < interval) return;
+    G.lastSyncAt = now;
+
+    var e = G.engine;
+    var snap = (G.phase === 'playing' || G.phase === 'roundover') && e ? e.snapshot() : { b: '', p: null, g: 0, alive: true };
+    var rates = matchStats();
+
+    var state = {
+      ready: !!G.ready,
+      epoch: G.room ? Number(G.room.readyEpoch || 1) : 1,
+      round: G.room ? G.room.round : 0,
+      alive: G.phase === 'playing' ? !!(e && e.alive) : true,
+      b: snap.b,
+      p: snap.p,
+      h: snap.h,
+      g: snap.g,
+      atk: G.myAttackLog,
+      stats: {
+        apm: Math.round(rates.apm * 100) / 100,
+        pps: Math.round(rates.pps * 100) / 100,
+        vs: Math.round(rates.vs * 100) / 100,
+        lines: e ? e.stats.lines : 0,
+        pieces: e ? e.stats.pieces : 0,
+        attack: e ? e.stats.attack : 0
+      }
+    };
+
+    Net.sync(G.roomCode, state).then(function (data) {
+      if (!data) return;
+      G.syncErrors = 0;
+      onSync(data);
+    }).catch(function (err) {
+      G.syncErrors++;
+      if (String(err.message).indexOf('ROOM_GONE') !== -1) {
+        U.toast('방이 사라졌습니다.', 'error');
+        App.exitToMenu();
+        return;
+      }
+      if (G.syncErrors === 6) U.toast('서버 응답이 느립니다…', 'error');
+      if (G.syncErrors > 24) {
+        U.toast('서버와의 연결이 끊어졌습니다.', 'error');
+        App.exitToMenu();
+      }
+    });
+  }
+
+  function onSync(data) {
+    var room = data.room;
+    var prev = G.room;
+    G.room = room;
+
+    // Track opponents and apply anything they have thrown at us.
+    var seen = {};
+    data.others.forEach(function (o) {
+      seen[o.id] = true;
+      var view = G.opponents[o.id] || (G.opponents[o.id] = {});
+      view.id = o.id;
+      view.name = o.name;
+      view.rank = o.rank;
+      view.rankColor = o.rankColor;
+      view.tr = o.tr;
+      view.wins = o.wins;
+      view.connected = o.connected;
+      if (o.state) {
+        view.board = o.state.b;
+        view.piece = o.state.p;
+        view.alive = o.state.alive !== false;
+        view.ready = !!o.state.ready;
+        view.stats = o.state.stats || {};
+        view.pendingGarbage = o.state.g || 0;
+        applyIncomingAttacks(o.id, o.state.atk);
+      }
+    });
+    Object.keys(G.opponents).forEach(function (id) {
+      if (!seen[id]) delete G.opponents[id];
+    });
+
+    if (App.currentScreen() === 'room') App.renderRoom(room, G.opponents, G.ready);
+
+    handleRoomState(room, prev);
+  }
+
+  function applyIncomingAttacks(fromId, events) {
+    if (!events || !events.length || !G.engine) return;
+
+    var cursor = G.applied[fromId];
+    if (!cursor || cursor.round !== G.currentRound) {
+      cursor = G.applied[fromId] = { round: G.currentRound, index: 0 };
+    }
+
+    var myId = Net.creds() && Net.creds().id;
+    events.forEach(function (ev) {
+      if (Number(ev.r) !== G.currentRound) return;   // left over from a past round
+      if (ev.i <= cursor.index) return;              // already applied
+      cursor.index = ev.i;
+      if (ev.to && ev.to !== myId) return;           // aimed at somebody else
+      if (G.phase !== 'playing' || !G.engine.alive) return;
+      G.engine.receiveGarbage(ev.n, fromId);
+    });
+  }
+
+  function handleRoomState(room, prev) {
+    var prevState = prev ? prev.state : null;
+    var prevRound = prev ? prev.round : 0;
+
+    if (room.state === 'lobby') {
+      if (G.phase !== 'lobby') {
+        G.phase = 'lobby';
+        App.showScreen('room');
+      }
+      return;
+    }
+
+    if (room.state === 'countdown') {
+      if (prevState !== 'countdown' || room.round !== prevRound) {
+        prepareOnlineRound(room);
+      }
+      if (App.currentScreen() !== 'game') App.showScreen('game');
+      var remain = room.startAt - Net.serverNow();
+      var n = Math.ceil(remain / 1000);
+      if (n !== G.countdownShown) {
+        G.countdownShown = n;
+        overlay('<div class="countdown">' + (n <= 0 ? 'GO' : n) + '</div>');
+        U.beep(n <= 1 ? 880 : 440, 90, 'sine', 0.05);
+      }
+      G.phase = 'ready';
+      return;
+    }
+
+    if (room.state === 'playing') {
+      if (G.phase !== 'playing') {
+        if (room.round !== G.currentRound) prepareOnlineRound(room);
+        G.phase = 'playing';
+        G.engine.alive = true;
+        G.startedAt = performance.now();
+        clearOverlay();
+        if (App.currentScreen() !== 'game') App.showScreen('game');
+      }
+      updateScoreStrip();
+      return;
+    }
+
+    if (room.state === 'roundover') {
+      if (G.phase !== 'roundover') {
+        G.phase = 'roundover';
+        var myId = Net.creds().id;
+        var iWon = room.roundWinner === myId;
+        var scores = room.players.map(function (p) { return p.wins; }).join(' — ');
+        banner(iWon ? 'ROUND WIN' : (room.roundWinner ? 'ROUND LOSS' : 'DRAW'), scores);
+        updateScoreStrip();
+      }
+      return;
+    }
+
+    if (room.state === 'matchover') {
+      if (G.phase !== 'matchover') {
+        G.phase = 'matchover';
+        // Drop readiness so the rematch only starts when both players opt in.
+        G.ready = false;
+        showVersusResult(room);
+      }
+      return;
+    }
+  }
+
+  function prepareOnlineRound(room) {
+    Input.setEnabled(true);
+    foldRoundStats();
+    if (room.round <= 1) resetMatchAgg();
+    G.currentRound = room.round;
+    G.engine = makeEngine('versus', room.seed, room.config);
+    G.engine.alive = false;
+    G.myAttackLog = [];
+    G.applied = {};
+    G.countdownShown = -1;
+    clearOverlay();
+    renderOpponentShells(room.players.filter(function (p) {
+      return p.id !== Net.creds().id;
+    }));
+    updateScoreStrip();
+  }
+
+  /* ------------------------------------------------------------ drawing */
+
+  function draw() {
+    var canvas = U.$('#board');
+    if (!canvas || !G.engine) return;
+    Render.board(canvas, G.engine, {
+      ghost: CONFIG.ghost,
+      grid: CONFIG.grid,
+      shake: G.shake,
+      flash: G.flash
+    });
+    Render.next(U.$('#next-canvas'), G.engine.nextQueue());
+    Render.hold(U.$('#hold-canvas'), G.engine.hold, G.engine.holdUsed);
+
+    var pending = G.engine.pendingGarbageCount();
+    var fill = U.$('#garbage-fill');
+    if (fill) {
+      var pct = Math.min(100, (pending / 16) * 100);
+      fill.style.height = pct + '%';
+      fill.classList.toggle('hot', pending >= 8);
+    }
+
+    // Opponent boards.
+    if (G.mode === 'cpu' && G.aiEngine) {
+      var c = U.$('#op-canvas-cpu');
+      if (c) Render.mini(c, G.aiEngine.serializeBoard(), G.aiEngine.piece ? {
+        t: G.aiEngine.piece.type, x: G.aiEngine.piece.x, y: G.aiEngine.piece.y, r: G.aiEngine.piece.rotation
+      } : null);
+      var box = U.$('#op-cpu');
+      if (box) box.classList.toggle('dead', !G.aiEngine.alive);
+      var st = U.$('#op-stats-cpu');
+      if (st) {
+        var r = G.aiEngine.rates();
+        st.innerHTML = '<span>' + U.fmtNum(r.apm, 1) + ' APM</span><span>' + U.fmtNum(r.pps, 2) + ' PPS</span>';
+      }
+    } else {
+      Object.keys(G.opponents).forEach(function (id) {
+        var view = G.opponents[id];
+        var canvasEl = U.$('#op-canvas-' + cssId(id));
+        if (canvasEl) Render.mini(canvasEl, view.board, view.piece);
+        var boxEl = U.$('#op-' + cssId(id));
+        if (boxEl) {
+          boxEl.classList.toggle('dead', view.alive === false);
+          boxEl.classList.toggle('disconnected', view.connected === false);
+        }
+        var stEl = U.$('#op-stats-' + cssId(id));
+        if (stEl && view.stats) {
+          stEl.innerHTML = '<span>' + U.fmtNum(view.stats.apm, 1) + ' APM</span>' +
+                           '<span>' + U.fmtNum(view.stats.pps, 2) + ' PPS</span>';
+        }
+      });
+    }
+  }
+
+  function cssId(id) { return String(id).replace(/[^A-Za-z0-9_-]/g, ''); }
+
+  function renderOpponentShells(players) {
+    var host = U.$('#opponents');
+    U.clear(host);
+    players.forEach(function (p) {
+      var id = cssId(p.id);
+      var badge = U.el('div', { class: 'rank-badge xs' });
+      U.paintRankBadge(badge, p.rank, p.rankColor);
+      var head = U.el('div', { class: 'opponent-head' }, [
+        badge,
+        U.el('div', { class: 'opponent-name', text: p.name })
+      ]);
+      var canvas = U.el('canvas', { id: 'op-canvas-' + id, width: 110, height: 220 });
+      var stats = U.el('div', { class: 'opponent-stats', id: 'op-stats-' + id, html: '<span>0.0 APM</span><span>0.00 PPS</span>' });
+      host.appendChild(U.el('div', { class: 'opponent', id: 'op-' + id }, [head, canvas, stats]));
+    });
+  }
+
+  /* ---------------------------------------------------------------- HUD */
+
+  function layoutForMode() {
+    var strip = U.$('#score-strip');
+    var versus = G.mode === 'versus' || G.mode === 'cpu';
+    strip.style.display = versus ? 'flex' : 'none';
+    U.$('#opponents').style.display = versus ? 'flex' : 'none';
+    U.$('.garbage-meter').style.display = versus ? 'flex' : 'none';
+
+    var extraKey = U.$('#s-extra-k');
+    if (G.mode === 'blitz') extraKey.textContent = 'Score';
+    else if (versus) extraKey.textContent = 'VS';
+    else extraKey.textContent = 'Combo';
+    U.clear(U.$('#popups'));
+  }
+
+  function updateHud() {
+    var e = G.engine;
+    if (!e) return;
+    var rates = e.rates();
+
+    var timeText;
+    if (G.mode === 'blitz') timeText = U.fmtTime(Math.max(0, MODE_GOALS.blitz.timeMs - e.elapsed));
+    else if (G.mode === 'sprint') timeText = U.fmtTimeMs(e.elapsed);
+    else timeText = U.fmtTime(e.elapsed);
+    U.$('#s-time').textContent = timeText;
+
+    U.$('#s-lines').textContent = G.mode === 'sprint'
+      ? (e.stats.lines + '/40')
+      : e.stats.lines;
+    U.$('#s-pieces').textContent = e.stats.pieces;
+    U.$('#s-pps').textContent = U.fmtNum(rates.pps, 2);
+    U.$('#s-apm').textContent = U.fmtNum(rates.apm, 1);
+
+    var extra = U.$('#s-extra');
+    if (G.mode === 'blitz') extra.textContent = e.score.toLocaleString();
+    else if (G.mode === 'versus' || G.mode === 'cpu') extra.textContent = U.fmtNum(rates.vs, 1);
+    else extra.textContent = Math.max(0, e.combo);
+  }
+
+  function updateScoreStrip() {
+    if (G.mode !== 'versus' && G.mode !== 'cpu') return;
+    var ft = G.mode === 'cpu' ? 3 : (G.room ? G.room.config.ft : 3);
+    U.$('#ss-ft').textContent = ft;
+
+    var myWins, opWins, opName, opRank, opColor;
+    if (G.mode === 'cpu') {
+      myWins = G.localScores.me; opWins = G.localScores.cpu;
+      opName = 'CPU LV.' + G.aiLevel; opRank = 'Z'; opColor = '#666B7A';
+    } else {
+      var myId = Net.creds().id;
+      var me = null, op = null;
+      (G.room ? G.room.players : []).forEach(function (p) {
+        if (p.id === myId) me = p; else if (!op) op = p;
+      });
+      myWins = me ? me.wins : 0;
+      opWins = op ? op.wins : 0;
+      opName = op ? op.name : '대기 중';
+      opRank = op ? op.rank : 'Z';
+      opColor = op ? op.rankColor : '#666B7A';
+    }
+
+    var profile = App.profile();
+    U.$('#ss-my-name').textContent = profile ? profile.name : '나';
+    U.paintRankBadge(U.$('#ss-my-rank'), profile ? profile.rank : 'Z', profile ? profile.rankColor : null);
+    U.$('#ss-op-name').textContent = opName;
+    U.paintRankBadge(U.$('#ss-op-rank'), opRank, opColor);
+    pips(U.$('#ss-my-pips'), myWins, ft);
+    pips(U.$('#ss-op-pips'), opWins, ft);
+  }
+
+  function pips(host, count, total) {
+    U.clear(host);
+    for (var i = 0; i < total; i++) {
+      host.appendChild(U.el('div', { class: 'pip' + (i < count ? ' on' : '') }));
+    }
+  }
+
+  /* ------------------------------------------------------------- popups */
+
+  function popup(text, cls) {
+    var host = U.$('#popups');
+    if (!host) return;
+    var node = U.el('div', { class: 'popup ' + (cls || 'type'), text: text });
+    host.appendChild(node);
+    setTimeout(function () { if (node.parentNode) node.parentNode.removeChild(node); }, 1600);
+    while (host.children.length > 6) host.removeChild(host.firstChild);
+  }
+
+  function showClearPopups(ev) {
+    if (ev.label) {
+      var cls = ev.spin ? 'spin' : (ev.lines === 4 ? 'quad' : 'type');
+      popup(ev.label, cls);
+    }
+    if (ev.b2b > 0) popup('B2B ×' + (ev.b2b + 1), 'b2b');
+    if (ev.combo > 0) popup((ev.combo + 1) + ' COMBO', 'combo');
+    if (ev.perfect) popup('PERFECT CLEAR', 'pc');
+    if (ev.attack > 0) popup('+' + ev.attack, 'b2b');
+  }
+
+  function overlay(html) {
+    var node = U.$('#board-overlay');
+    if (node) node.innerHTML = html;
+  }
+  function clearOverlay() { overlay(''); }
+
+  function banner(title, sub) {
+    overlay('<div class="big-banner">' + U.escapeHtml(title) +
+            (sub ? '<small>' + U.escapeHtml(sub) + '</small>' : '') + '</div>');
+  }
+
+  /* ------------------------------------------------------------ results */
+
+  function statCells(stats) {
+    return [
+      { k: 'APM', v: U.fmtNum(stats.apm, 1) },
+      { k: 'PPS', v: U.fmtNum(stats.pps, 2) },
+      { k: 'VS', v: U.fmtNum(stats.vs, 1) },
+      { k: 'Lines', v: stats.lines },
+      { k: 'Pieces', v: stats.pieces },
+      { k: 'Quads', v: stats.quads || 0 },
+      { k: 'T-Spins', v: stats.tspins || 0 },
+      { k: 'Max B2B', v: stats.maxB2B || 0 }
+    ];
+  }
+
+  function statGridHtml(stats) {
+    return '<div class="stat-grid">' + statCells(stats).map(function (c) {
+      return '<div class="stat-cell"><div class="k">' + c.k + '</div><div class="v">' + c.v + '</div></div>';
+    }).join('') + '</div>';
+  }
+
+  function showSoloResult(payload, improved) {
+    stop();
+    var titles = {
+      sprint: payload.completed ? '40 LINES' : 'TOP OUT',
+      blitz: 'BLITZ',
+      zen: 'ZEN'
+    };
+    var headline = payload.completed ? U.fmtTimeMs(payload.timeMs) : 'TOP OUT';
+    if (payload.mode === 'blitz') headline = payload.score.toLocaleString();
+
+    var html = '<div class="subtitle center">' + titles[payload.mode] + '</div>' +
+      '<div class="result-headline ' + (payload.completed ? 'win' : 'lose') + '" style="font-size:52px;margin-top:12px">' +
+      U.escapeHtml(headline) + '</div>' +
+      (improved ? '<div class="rank-change-banner" style="color:var(--good)">개인 최고 기록 경신!</div>' : '') +
+      statGridHtml(payload.stats);
+    U.$('#result-card').innerHTML = html;
+    G.result = { kind: 'solo', mode: payload.mode };
+    App.showScreen('result');
+  }
+
+  function showCpuResult(won) {
+    stop();
+    foldRoundStats();
+    var html = '<div class="subtitle center">VS CPU LV.' + G.aiLevel + '</div>' +
+      '<div class="result-headline ' + (won ? 'win' : 'lose') + '" style="margin-top:12px">' +
+      (won ? 'VICTORY' : 'DEFEAT') + '</div>' +
+      '<div class="center mono" style="font-size:26px;margin-top:10px">' +
+      G.localScores.me + ' — ' + G.localScores.cpu + '</div>' +
+      statGridHtml(matchStats());
+    U.$('#result-card').innerHTML = html;
+    G.result = { kind: 'cpu' };
+    App.showScreen('result');
+  }
+
+  function showVersusResult(room) {
+    pause();
+    foldRoundStats();
+    var myId = Net.creds().id;
+    var won = room.matchWinner === myId;
+    var me = null, op = null;
+    room.players.forEach(function (p) { if (p.id === myId) me = p; else if (!op) op = p; });
+
+    var html = '<div class="subtitle center">' +
+      (room.mode === 'ranked' ? 'RANKED · FT' + room.config.ft : 'CASUAL · FT' + room.config.ft) + '</div>' +
+      '<div class="result-headline ' + (won ? 'win' : 'lose') + '" style="margin-top:12px">' +
+      (won ? 'VICTORY' : 'DEFEAT') + '</div>' +
+      '<div class="center mono" style="font-size:30px;margin-top:12px">' +
+      (me ? me.wins : 0) + ' — ' + (op ? op.wins : 0) + '</div>';
+
+    var delta = room.results && room.results.delta && room.results.delta[myId];
+    if (delta && room.results.ranked) {
+      var diff = delta.trAfter - delta.trBefore;
+      html += '<div class="tr-change">' +
+        '<div class="tr-num">' + delta.trBefore.toLocaleString() + '</div>' +
+        '<div class="tr-arrow">→</div>' +
+        '<div class="tr-num">' + delta.trAfter.toLocaleString() + '</div>' +
+        '<div class="tr-delta ' + (diff >= 0 ? 'up' : 'down') + '">' +
+        (diff >= 0 ? '+' : '') + diff.toLocaleString() + ' TR</div></div>';
+
+      if (delta.rankBefore && delta.rank && delta.rankBefore !== delta.rank) {
+        var up = (window.RANK_TABLE ? rankIndex(delta.rank) > rankIndex(delta.rankBefore) : true);
+        html += '<div class="rank-change-banner" style="color:' +
+          (window.RANK_COLORS[delta.rank] || '#fff') + '">' +
+          (up ? 'RANK UP' : 'RANK DOWN') + ' · ' + delta.rankBefore + ' → ' + delta.rank + '</div>';
+      }
+      if (delta.games < 10) {
+        html += '<p class="hint center" style="margin-top:12px">배치 경기 ' + delta.games + '/10 — ' +
+          (10 - delta.games) + '경기 더 치르면 랭크가 부여됩니다.</p>';
+      }
+    }
+
+    html += statGridHtml(matchStats());
+    U.$('#result-card').innerHTML = html;
+    G.result = { kind: 'versus', roomCode: room.code, ranked: room.mode === 'ranked' };
+
+    App.refreshProfile();
+    App.showScreen('result');
+  }
+
+  function rankIndex(name) {
+    if (!window.RANK_TABLE) return -1;
+    for (var i = 0; i < window.RANK_TABLE.ladder.length; i++) {
+      if (window.RANK_TABLE.ladder[i].name === name) return i;
+    }
+    return -1;
+  }
+
+  /* -------------------------------------------------------------- misc */
+
+  function setReady(v) { G.ready = !!v; }
+  function isReady() { return !!G.ready; }
+  function state() { return G; }
+
+  return {
+    startSolo: startSolo,
+    startCpu: startCpu,
+    startVersus: startVersus,
+    stop: stop,
+    leave: leave,
+    setReady: setReady,
+    isReady: isReady,
+    state: state,
+    updateScoreStrip: updateScoreStrip,
+    result: function () { return G.result; }
+  };
+})();
+</script>

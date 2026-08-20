@@ -1,0 +1,277 @@
+<script>
+/* ================================================================== CPU ==
+   A heuristic bot so the versus mode is playable without a second human.
+
+   It searches every reachable "simple" placement (rotate at spawn, slide
+   across, drop) for the current piece and for the held piece, scores the
+   resulting board, and takes the best one. Difficulty changes how fast it
+   plays and how often it deliberately takes a worse placement.
+   ========================================================================= */
+
+/**
+ * Difficulty is speed plus a small dose of sloppiness. Taking hold away from
+ * the easy levels was tried and rejected: it does not make the bot easier to
+ * beat, it makes it top out on its own, which is no fun to play against.
+ */
+var AI_LEVELS = [
+  { name: '아주 쉬움',   pps: 0.55, mistake: 0.16 },
+  { name: '쉬움',        pps: 0.90, mistake: 0.10 },
+  { name: '보통',        pps: 1.35, mistake: 0.05 },
+  { name: '어려움',      pps: 1.90, mistake: 0.02 },
+  { name: '매우 어려움', pps: 2.60, mistake: 0.00 }
+];
+
+var AI = (function () {
+
+  /**
+   * Weights are tuned for versus, not for survival: clearing a single line
+   * when the stack is low is actively bad because it throws away the setup
+   * for a quad, so those clears carry a penalty while attack is rewarded.
+   */
+  var WEIGHTS = {
+    aggregateHeight: -0.30,
+    holes: -4.0,
+    bumpiness: -0.30,
+    maxHeight: -0.50,
+    extraWell: -0.60,      // one deep well is the quad well; the rest are damage
+    deepWell: -1.50,       // ...but even the quad well must not become a canyon
+    attack: 2.20,
+    wasteClear: -6.00,     // 1-3 lines with no bonus, while we are still safe
+    dangerClear: 3.00,     // ...but when buried, any clear is a good clear
+    danger: -3.00
+  };
+
+  var DANGER_HEIGHT = 12;
+  var MAX_WELL_DEPTH = 4;    // deep enough for a quad, shallow enough to escape
+
+  function columnHeights(cells) {
+    var heights = new Array(BOARD_W);
+    for (var x = 0; x < BOARD_W; x++) {
+      heights[x] = 0;
+      for (var y = 0; y < BOARD_H; y++) {
+        if (cells[y * BOARD_W + x]) { heights[x] = BOARD_H - y; break; }
+      }
+    }
+    return heights;
+  }
+
+  function evaluate(cells, linesCleared, attack, pendingGarbage) {
+    var heights = columnHeights(cells);
+    var aggregate = 0, maxHeight = 0, holes = 0;
+
+    for (var x = 0; x < BOARD_W; x++) {
+      aggregate += heights[x];
+      if (heights[x] > maxHeight) maxHeight = heights[x];
+      var top = BOARD_H - heights[x];
+      for (var y = top + 1; y < BOARD_H; y++) {
+        if (!cells[y * BOARD_W + x]) holes++;
+      }
+    }
+
+    // Bumpiness ignores its single largest step, so the quad well does not
+    // read as a defect.
+    var diffs = [];
+    for (var c = 1; c < BOARD_W; c++) diffs.push(Math.abs(heights[c] - heights[c - 1]));
+    diffs.sort(function (a, b) { return b - a; });
+    var bumpiness = 0;
+    for (var d = 1; d < diffs.length; d++) bumpiness += diffs[d];
+
+    // Same idea for wells: keep the deepest one for free, penalise the rest.
+    var wells = [];
+    for (var w = 0; w < BOARD_W; w++) {
+      var left = w === 0 ? BOARD_H : heights[w - 1];
+      var right = w === BOARD_W - 1 ? BOARD_H : heights[w + 1];
+      var depth = Math.min(left, right) - heights[w];
+      if (depth >= 2) wells.push(depth);
+    }
+    wells.sort(function (a, b) { return b - a; });
+    var extraWells = 0;
+    for (var k = 1; k < wells.length; k++) extraWells += wells[k];
+    // A well deeper than a quad needs is a trap: nothing but an I can clear
+    // it, and if one does not arrive the bot buries itself.
+    var deepWell = wells.length ? Math.max(0, wells[0] - MAX_WELL_DEPTH) : 0;
+
+    var danger = Math.max(0, maxHeight + (pendingGarbage || 0) - DANGER_HEIGHT);
+
+    var clearTerm = 0;
+    if (linesCleared > 0) {
+      if (danger > 0) clearTerm = WEIGHTS.dangerClear * linesCleared;
+      else if (linesCleared < 4 && attack < 2) clearTerm = WEIGHTS.wasteClear * linesCleared;
+    }
+
+    return WEIGHTS.aggregateHeight * aggregate +
+           WEIGHTS.holes * holes +
+           WEIGHTS.bumpiness * bumpiness +
+           WEIGHTS.maxHeight * maxHeight +
+           WEIGHTS.extraWell * extraWells +
+           WEIGHTS.deepWell * deepWell +
+           WEIGHTS.attack * attack +
+           WEIGHTS.danger * danger +
+           clearTerm;
+  }
+
+  /** Drops `type` at (rotation, x) onto a copy of `cells`. */
+  function simulate(cells, type, rotation, x) {
+    var defs = PIECES[type].cells[rotation];
+    var y = 0;
+
+    var fits = function (py) {
+      for (var i = 0; i < 4; i++) {
+        var cx = x + defs[i][0];
+        var cy = py + defs[i][1];
+        if (cx < 0 || cx >= BOARD_W || cy >= BOARD_H) return false;
+        if (cy >= 0 && cells[cy * BOARD_W + cx]) return false;
+      }
+      return true;
+    };
+
+    if (!fits(y)) {
+      // Try a little higher in case the spawn row itself is blocked.
+      var found = false;
+      for (var probe = -3; probe < 0; probe++) {
+        if (fits(probe)) { y = probe; found = true; break; }
+      }
+      if (!found) return null;
+    }
+    while (fits(y + 1)) y++;
+
+    var copy = new Uint8Array(cells);
+    var color = PIECES[type].color;
+    var topmost = BOARD_H;
+    for (var i = 0; i < 4; i++) {
+      var cx = x + defs[i][0];
+      var cy = y + defs[i][1];
+      if (cy < 0) return null;   // locked out above the field
+      copy[cy * BOARD_W + cx] = color;
+      if (cy < topmost) topmost = cy;
+    }
+
+    var lines = 0;
+    var write = BOARD_H - 1;
+    for (var read = BOARD_H - 1; read >= 0; read--) {
+      var full = true;
+      for (var c = 0; c < BOARD_W; c++) {
+        if (!copy[read * BOARD_W + c]) { full = false; break; }
+      }
+      if (full) { lines++; continue; }
+      if (write !== read) {
+        for (var c2 = 0; c2 < BOARD_W; c2++) copy[write * BOARD_W + c2] = copy[read * BOARD_W + c2];
+      }
+      write--;
+    }
+    for (; write >= 0; write--) {
+      for (var c3 = 0; c3 < BOARD_W; c3++) copy[write * BOARD_W + c3] = 0;
+    }
+
+    return { cells: copy, lines: lines, y: y };
+  }
+
+  /** Enumerates placements for one piece type on one board. */
+  function placementsFor(cells, type, pendingGarbage, comboState) {
+    var out = [];
+    var rotations = type === 'O' ? 1 : (type === 'I' || type === 'S' || type === 'Z' ? 2 : 4);
+    for (var r = 0; r < rotations; r++) {
+      for (var x = -2; x < BOARD_W + 1; x++) {
+        var sim = simulate(cells, type, r, x);
+        if (!sim) continue;
+        var atk = Attack.compute({
+          lines: sim.lines, spin: null,
+          combo: sim.lines > 0 ? (comboState.combo + 1) : -1,
+          b2b: sim.lines === 4 ? comboState.b2b + 1 : (sim.lines > 0 ? -1 : comboState.b2b),
+          perfect: false, multiplier: 1
+        }).attack;
+        out.push({
+          type: type, rotation: r, x: x, lines: sim.lines, attack: atk,
+          score: evaluate(sim.cells, sim.lines, atk, pendingGarbage),
+          cells: sim.cells
+        });
+      }
+    }
+    return out;
+  }
+
+  function bestPlacement(engine, level) {
+    if (!engine.piece) return null;
+    var cfg = AI_LEVELS[U.clamp(level - 1, 0, AI_LEVELS.length - 1)];
+    var pending = engine.pendingGarbageCount();
+    var comboState = { combo: engine.combo, b2b: engine.b2b };
+
+    var options = placementsFor(engine.cells, engine.piece.type, pending, comboState);
+
+    var holdType = engine.hold || engine.bag.peek(1)[0];
+    if (holdType && holdType !== engine.piece.type && !engine.holdUsed) {
+      placementsFor(engine.cells, holdType, pending, comboState).forEach(function (p) {
+        p.useHold = true;
+        options.push(p);
+      });
+    }
+
+    if (!options.length) return null;
+    options.sort(function (a, b) { return b.score - a.score; });
+
+    // Deliberate mistakes give the lower levels a human-ish sloppiness. The
+    // pick stays near the top of the ranking so a slip is untidy, not fatal.
+    if (cfg.mistake > 0 && Math.random() < cfg.mistake && options.length > 3) {
+      var pick = 1 + Math.floor(Math.random() * Math.min(3, options.length - 1));
+      return options[pick];
+    }
+    return options[0];
+  }
+
+  /**
+   * Drives an Engine as an opponent. Placement is applied directly rather
+   * than by synthesising keypresses — the bot does not need to be limited
+   * by handling settings.
+   */
+  function Controller(engine, level) {
+    this.engine = engine;
+    this.level = level;
+    this.cfg = AI_LEVELS[U.clamp(level - 1, 0, AI_LEVELS.length - 1)];
+    this.accumulator = 0;
+    this.interval = 1000 / this.cfg.pps;
+  }
+
+  Controller.prototype.setLevel = function (level) {
+    this.level = level;
+    this.cfg = AI_LEVELS[U.clamp(level - 1, 0, AI_LEVELS.length - 1)];
+    this.interval = 1000 / this.cfg.pps;
+  };
+
+  Controller.prototype.update = function (dtMs) {
+    var engine = this.engine;
+    if (!engine.alive || !engine.piece) return;
+
+    this.accumulator += dtMs;
+    while (this.accumulator >= this.interval && engine.alive) {
+      this.accumulator -= this.interval;
+
+      var plan = bestPlacement(engine, this.level);
+      if (!plan) { engine.hardDrop(); continue; }
+
+      if (plan.useHold) {
+        engine.holdPiece();
+        // Hold swaps the active piece; re-plan against what actually arrived.
+        plan = bestPlacement(engine, this.level);
+        if (!plan) { engine.hardDrop(); continue; }
+      }
+
+      engine.piece.rotation = plan.rotation;
+      engine.piece.x = plan.x;
+      if (engine.collides(engine.piece)) {
+        // Fall back to a straight drop rather than leaving the piece stuck.
+        engine.piece.rotation = 0;
+        engine.piece.x = PIECES[engine.piece.type].spawnX;
+      }
+      engine.hardDrop();
+    }
+  };
+
+  return {
+    levels: AI_LEVELS,
+    weights: WEIGHTS,
+    bestPlacement: bestPlacement,
+    Controller: Controller,
+    evaluate: evaluate
+  };
+})();
+</script>

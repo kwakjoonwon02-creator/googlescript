@@ -1,0 +1,14 @@
+{
+  "name": "tetra-gs-tests",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Headless test suites for TETRA.GS",
+  "scripts": {
+    "test": "node run.js",
+    "test:fast": "node run.js fast",
+    "serve": "node serve.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.40.0"
+  }
+}
