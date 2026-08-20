@@ -167,6 +167,10 @@
             </div>
           </div>
           <div class="switch-row">
+            <div class="switch-label">타겟팅<small>3인 이상일 때 공격이 누구에게 갈지</small></div>
+            <button class="btn sm" id="cfg-targeting">랜덤</button>
+          </div>
+          <div class="switch-row">
             <div class="switch-label">비공개 방<small>목록에 노출되지 않고 코드로만 참가</small></div>
             <button class="btn sm" id="cfg-private">OFF</button>
           </div>
@@ -178,7 +182,9 @@
           <div class="row">
             <input class="input code grow" id="join-code" maxlength="5" placeholder="ABCDE">
             <button class="btn" id="btn-join-code">참가</button>
+            <button class="btn ghost" id="btn-spectate-code">관전</button>
           </div>
+          <p class="hint" style="margin:10px 0 0">방이 꽉 찼거나 경기 중이면 자동으로 관전으로 들어갑니다.</p>
         </div>
       </div>
 
@@ -204,24 +210,38 @@
       </div>
     </div>
 
-    <div class="row grow" style="gap:20px;min-height:0">
-      <div class="panel grow" style="display:flex;flex-direction:column;min-height:0">
-        <div class="panel-title">플레이어 <span id="room-count" class="faint"></span></div>
-        <div class="scroll grow" id="room-players"></div>
+    <div class="row grow" style="gap:16px;min-height:0">
+
+      <div style="width:290px;display:flex;flex-direction:column;gap:14px;min-height:0">
+        <div class="panel grow" style="display:flex;flex-direction:column;min-height:0">
+          <div class="panel-title">플레이어 <span id="room-count" class="faint"></span></div>
+          <div class="scroll grow" id="room-players"></div>
+          <div class="panel-title" style="margin-top:14px">관전 <span id="room-spectator-count" class="faint"></span></div>
+          <div id="room-spectators" class="hint">없음</div>
+        </div>
+        <button class="btn sm wide" id="btn-toggle-seat">관전으로 전환</button>
       </div>
-      <div style="width:340px;display:flex;flex-direction:column;gap:14px">
-        <div class="panel">
-          <div class="panel-title">규칙</div>
-          <div class="switch-row"><div class="switch-label">First to</div><div class="mono" id="room-ft">3</div></div>
-          <div class="switch-row"><div class="switch-label">최대 인원</div><div class="mono" id="room-max">2</div></div>
-          <div class="switch-row"><div class="switch-label">랭크 반영</div><div class="mono" id="room-ranked">아니오</div></div>
+
+      <div class="panel grow" style="display:flex;flex-direction:column;min-height:0">
+        <div class="panel-title">채팅</div>
+        <div class="scroll grow chat-log" id="chat-log">
+          <p class="hint">아직 대화가 없습니다.</p>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <input class="input grow" id="chat-input" maxlength="200" placeholder="메시지를 입력하고 Enter">
+          <button class="btn" id="btn-chat-send">보내기</button>
+        </div>
+      </div>
+
+      <div style="width:330px;display:flex;flex-direction:column;gap:14px;min-height:0">
+        <div class="panel grow scroll" style="min-height:0">
+          <div class="panel-title">규칙 <span class="faint" id="room-rules-owner"></span></div>
+          <div id="room-rules"></div>
         </div>
         <div class="panel">
           <div class="panel-title">초대</div>
-          <p class="hint" style="margin:0 0 10px">아래 코드를 친구에게 알려주세요.</p>
           <div class="input code" id="room-code-big" style="cursor:pointer">—</div>
         </div>
-        <div class="spacer"></div>
         <button class="btn primary wide" id="btn-ready" style="font-size:19px;padding:16px">준비</button>
         <p class="hint center" id="room-hint">모든 플레이어가 준비하면 시작합니다.</p>
       </div>
@@ -351,6 +371,8 @@
   <section class="screen" id="screen-game">
     <div class="stage">
       <div class="match-column">
+
+        <div class="badge live" id="spectate-tag" style="display:none;margin-bottom:8px">관전 중 — ESC로 나가기</div>
 
         <div class="score-strip" id="score-strip" style="display:none">
           <div class="score-side">

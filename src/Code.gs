@@ -52,6 +52,7 @@ function rpcHandlers_() {
     roomLeave: Api_roomLeave,
     roomConfig: Api_roomConfig,
     roomList: Api_roomList,
+    chatSend: Api_chatSend,
     sync: Api_sync
   };
 }

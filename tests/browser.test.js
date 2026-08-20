@@ -248,6 +248,175 @@ const { testAsync: t, assert, eq, section, note, finish } = require('./lib/repor
     await page.waitForSelector('#screen-multi.active', { timeout: 5000 });
   });
 
+  section('room rules and chat');
+
+  await t('the rule editor is built from the server schema', async () => {
+    await page.click('#screen-multi [data-nav="menu"]');
+    await page.waitForSelector('#screen-menu.active');
+    await page.click('[data-nav="multi"]');
+    await page.waitForSelector('#screen-multi.active');
+    await page.click('#btn-create-room');
+    await page.waitForSelector('#screen-room.active', { timeout: 8000 });
+    const rows = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#room-rules .rule-row')).map(r =>
+        r.querySelector('.rule-name b').textContent));
+    assert(rows.length >= 12, 'expected the full rule list, got ' + rows.length);
+    assert(rows.includes('타겟팅'), 'targeting rule missing');
+    assert(rows.includes('홀드 허용'), 'hold rule missing');
+    assert(rows.includes('넥스트 개수'), 'preview rule missing');
+  });
+
+  const clickRule = (label, which) => page.evaluate(([label, which]) => {
+    const row = Array.from(document.querySelectorAll('#room-rules .rule-row'))
+      .find(r => r.querySelector('.rule-name b').textContent === label);
+    if (!row) throw new Error('no rule row: ' + label);
+    const buttons = row.querySelectorAll('button');
+    buttons[which === undefined ? 0 : which].click();
+  }, [label, which]);
+
+  await t('the host can change a numeric rule and the server confirms it', async () => {
+    const before = await page.evaluate(() => Game.state().room.config.nextCount);
+    await clickRule('넥스트 개수', 1);            // the "+" of the stepper
+    await page.waitForFunction(
+      b => Game.state().room.config.nextCount === b + 1, before, { timeout: 8000 });
+    // Re-render from the server's copy to prove it was not just optimistic.
+    const confirmed = await page.evaluate(async () => {
+      const room = Game.state().room;
+      const res = await new Promise(r => google.script.run.withSuccessHandler(r).rpc(
+        'roomJoin', { id: Net.creds().id, token: Net.creds().token, code: room.code }));
+      return res.ok ? res.data.room.config.nextCount : -1;
+    });
+    eq(confirmed, before + 1, 'server did not store the new preview count');
+  });
+
+  await t('toggling a boolean rule works', async () => {
+    const before = await page.evaluate(() => Game.state().room.config.allowHold);
+    await clickRule('홀드 허용');
+    await page.waitForFunction(
+      b => Game.state().room.config.allowHold !== b, before, { timeout: 8000 });
+  });
+
+  await t('cycling the targeting strategy walks all four options', async () => {
+    const seen = new Set();
+    for (let i = 0; i < 5; i++) {
+      seen.add(await page.evaluate(() => Game.state().room.config.targeting));
+      await clickRule('타겟팅');
+      await page.waitForTimeout(400);
+    }
+    eq(seen.size, 4, 'expected four strategies, saw ' + Array.from(seen).join(','));
+  });
+
+  await t('chat posts, renders, and escapes markup', async () => {
+    await page.fill('#chat-input', '안녕하세요 <b>test</b>');
+    await page.click('#btn-chat-send');
+    await page.waitForFunction(
+      () => document.querySelectorAll('#chat-log .chat-msg').length === 1, null, { timeout: 8000 });
+    const msg = await page.textContent('#chat-log .chat-msg');
+    assert(/안녕하세요/.test(msg), 'message text missing: ' + msg);
+    assert(/<b>test<\/b>/.test(msg), 'markup should survive as text: ' + msg);
+    eq(await page.evaluate(() => document.querySelectorAll('#chat-log .chat-msg b').length), 0,
+      'raw markup was rendered instead of escaped');
+    eq(await page.inputValue('#chat-input'), '', 'input should clear after sending');
+  });
+
+  await t('the rule editor is read-only for a non-host', async () => {
+    await page.evaluate(() => {
+      const room = Game.state().room;
+      App.renderRoom(Object.assign({}, room, { host: 'someone-else' }), {}, false);
+    });
+    const editable = await page.evaluate(() =>
+      document.querySelectorAll('#room-rules button').length);
+    eq(editable, 0, 'a guest must not get rule controls');
+    const locked = await page.evaluate(() =>
+      document.querySelectorAll('#room-rules .rule-row.locked').length);
+    assert(locked >= 12, 'rows should be marked locked, got ' + locked);
+    await page.evaluate(() => App.renderRoom(Game.state().room, {}, false));
+  });
+
+  await t('the room shows an empty spectator bench', async () => {
+    eq(await page.textContent('#room-spectator-count'), '(0)', 'spectator count');
+    assert(/없음/.test(await page.textContent('#room-spectators')), 'bench should read empty');
+    assert(await page.isVisible('#btn-toggle-seat'), 'seat toggle should be offered');
+  });
+
+  await t('leaving the rules room returns to the browser', async () => {
+    await page.click('#btn-leave-room');
+    await page.waitForSelector('#screen-multi.active', { timeout: 8000 });
+  });
+
+  section('targeting strategies');
+
+  await t('each strategy picks the opponent it promises', async () => {
+    const result = await page.evaluate(() => {
+      const g = Game.state();
+      const saved = { room: g.room, opponents: g.opponents, sentTo: g.sentTo, attackedMeAt: g.attackedMeAt };
+
+      // Three living opponents with distinct histories.
+      g.opponents = {
+        alice: { id: 'alice', connected: true, alive: true, ko: 0 },
+        bob:   { id: 'bob',   connected: true, alive: true, ko: 3 },
+        carol: { id: 'carol', connected: true, alive: true, ko: 1 }
+      };
+      g.sentTo = { alice: 20, bob: 5, carol: 40 };
+      g.attackedMeAt = { alice: 1000, bob: 2000, carol: 9000 };
+
+      const sample = (strategy, n) => {
+        g.room = { config: { targeting: strategy } };
+        const picks = {};
+        for (let i = 0; i < n; i++) {
+          const id = Game.pickTarget();
+          picks[id] = (picks[id] || 0) + 1;
+        }
+        return picks;
+      };
+
+      const out = {
+        even: sample('even', 30),
+        attackers: sample('attackers', 30),
+        badges: sample('badges', 30),
+        random: sample('random', 300)
+      };
+
+      // Dead and disconnected players must never be targeted.
+      g.opponents.bob.alive = false;
+      g.opponents.carol.connected = false;
+      out.badgesWithBobDead = sample('badges', 20);
+
+      Object.assign(g, saved);
+      return out;
+    });
+
+    eq(Object.keys(result.even).join(), 'bob', 'even should pick the least-attacked (bob)');
+    eq(Object.keys(result.attackers).join(), 'carol', 'attackers should pick the most recent (carol)');
+    eq(Object.keys(result.badges).join(), 'bob', 'badges should pick the KO leader (bob)');
+    assert(Object.keys(result.random).length === 3,
+      'random should spread over everyone, saw ' + Object.keys(result.random).join());
+    eq(Object.keys(result.badgesWithBobDead).join(), 'alice',
+      'a dead or disconnected player must never be targeted');
+  });
+
+  await t('ties are broken at random rather than always the same player', async () => {
+    const picks = await page.evaluate(() => {
+      const g = Game.state();
+      const saved = { room: g.room, opponents: g.opponents, sentTo: g.sentTo };
+      g.opponents = {
+        p1: { id: 'p1', connected: true, alive: true, ko: 2 },
+        p2: { id: 'p2', connected: true, alive: true, ko: 2 }
+      };
+      g.sentTo = {};
+      g.room = { config: { targeting: 'badges' } };
+      const out = {};
+      for (let i = 0; i < 200; i++) {
+        const id = Game.pickTarget();
+        out[id] = (out[id] || 0) + 1;
+      }
+      Object.assign(g, saved);
+      return out;
+    });
+    eq(Object.keys(picks).length, 2, 'a tie should reach both players');
+    assert(picks.p1 > 40 && picks.p2 > 40, 'tie-break looks lopsided: ' + JSON.stringify(picks));
+  });
+
   section('ranked queue');
   await t('ranked queue starts and can be cancelled', async () => {
     await page.click('#screen-multi [data-nav="menu"]');

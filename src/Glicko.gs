@@ -155,23 +155,19 @@ function Glicko_winProbability(a, b) {
 }
 
 /**
- * Rates one finished match. A best-of series is fed in as one Glicko-2
- * rating period: each round is a separate result against the same opponent,
- * which is what TETR.IO does for its FT matches.
+ * Rates one finished match as a single Glicko-2 result: who won, not by how
+ * much. This is what TETR.IO does — the first-to-N is a format, and only the
+ * match outcome reaches the rating.
+ *
+ * Feeding each round in separately was tried and rejected. It carries more
+ * information, but it makes a favourite who wins 3-2 look like they
+ * underperformed, so winning a ranked match could lower your TR. No player
+ * accepts that, however correct the arithmetic is.
  */
 function Glicko_rateMatch(p1, p2, score1, score2) {
-  var r1 = [];
-  var r2 = [];
-  for (var i = 0; i < score1; i++) {
-    r1.push({ glicko: p2.glicko, rd: p2.rd, score: 1 });
-    r2.push({ glicko: p1.glicko, rd: p1.rd, score: 0 });
-  }
-  for (var j = 0; j < score2; j++) {
-    r1.push({ glicko: p2.glicko, rd: p2.rd, score: 0 });
-    r2.push({ glicko: p1.glicko, rd: p1.rd, score: 1 });
-  }
+  var outcome = score1 === score2 ? 0.5 : (score1 > score2 ? 1 : 0);
   return {
-    p1: Glicko_update(p1, r1),
-    p2: Glicko_update(p2, r2)
+    p1: Glicko_update(p1, [{ glicko: p2.glicko, rd: p2.rd, score: outcome }]),
+    p2: Glicko_update(p2, [{ glicko: p1.glicko, rd: p1.rd, score: 1 - outcome }])
   };
 }

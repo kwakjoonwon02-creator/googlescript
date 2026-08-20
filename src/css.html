@@ -389,6 +389,48 @@ canvas#board { display: block; }
   display: block; font-size: 15px; letter-spacing: 0.24em; color: var(--text-dim); margin-top: 8px;
 }
 
+/* ----------------------------------------------------------------- chat */
+
+.chat-log { display: flex; flex-direction: column; gap: 6px; padding-right: 4px; }
+.chat-msg { font-size: 14px; line-height: 1.35; word-break: break-word; }
+.chat-msg .who { font-weight: 700; letter-spacing: 0.04em; margin-right: 6px; }
+.chat-msg.mine .who { color: var(--accent); }
+.chat-msg.spectator .who { color: var(--text-faint); }
+.chat-msg.spectator .who::after { content: ' (관전)'; font-size: 10px; letter-spacing: 0.1em; }
+.chat-msg .when { float: right; font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); }
+.chat-msg.system { color: var(--text-dim); font-style: italic; }
+
+/* ------------------------------------------------------------ rule editor */
+
+.rule-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.rule-row:last-child { border-bottom: none; }
+.rule-row .rule-name { font-size: 13px; }
+.rule-row .rule-name small {
+  display: block; color: var(--text-faint); font-size: 11px; letter-spacing: 0; margin-top: 1px;
+}
+.rule-row .stepper .value { min-width: 84px; font-size: 13px; }
+.rule-row.locked { opacity: 0.72; }
+.rule-value {
+  font-family: var(--font-mono); font-size: 13px; color: var(--text);
+  padding: 5px 10px; background: rgba(255,255,255,0.05); border-radius: 2px;
+  min-width: 84px; text-align: center;
+}
+
+/* -------------------------------------------------------- spectator view */
+
+.stage.spectating .side,
+.stage.spectating .popup-rail,
+.stage.spectating .board-wrap { display: none !important; }
+.stage.spectating .opponents { gap: 20px; }
+.stage.spectating .opponent-name { font-size: 16px; }
+.stage.spectating .opponent-stats {
+  display: flex; justify-content: space-between; gap: 6px;
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-dim);
+}
+
 /* ---- clear / spin popups, in their own lane left of the matrix ---- */
 .popup-rail {
   width: 156px; align-self: stretch;
@@ -428,6 +470,10 @@ canvas#board { display: block; }
   transition: border-color 0.2s, opacity 0.2s;
 }
 .opponent.dead { opacity: 0.45; border-color: rgba(255,77,106,0.5); }
+.opponent.targeted {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 22px -8px var(--accent);
+}
 .opponent.disconnected { opacity: 0.3; }
 .opponent-head { display: flex; align-items: center; gap: 7px; }
 .opponent-name { font-weight: 700; font-size: 14px; letter-spacing: 0.05em; flex: 1; }

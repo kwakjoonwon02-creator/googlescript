@@ -9,9 +9,45 @@ var App = (function () {
   var profile = null;
   var queueTimer = null;
   var queueStartedAt = 0;
-  var pendingRoomConfig = { ft: 3, maxPlayers: 2, isPrivate: false };
+  var pendingRoomConfig = { ft: 3, maxPlayers: 2, isPrivate: false, targeting: 'random' };
   var lbTab = 'ranked';
   var lbData = null;
+  var chatHistory = [];
+  var CHAT_KEEP = 60;
+
+  /**
+   * Presentation for each room rule. The server publishes types and ranges;
+   * this adds the label, the step size and the display order.
+   */
+  var RULE_META = {
+    ft:                { label: 'First to', step: 1, hint: '먼저 N라운드 승리' },
+    maxPlayers:        { label: '최대 인원', step: 1, hint: '2~4인' },
+    targeting:         { label: '타겟팅', hint: '3인 이상일 때 공격 대상',
+                         names: { random: '랜덤', even: '균등', attackers: '보복', badges: '1위 집중' } },
+    gravity:           { label: '중력', step: 0.1, unit: '줄/초' },
+    gravityIncrease:   { label: '중력 증가', step: 0.05, unit: '줄/초', hint: '일정 시간마다 가속' },
+    gravityEvery:      { label: '증가 주기', step: 5000, unit: 'ms' },
+    lockDelay:         { label: '락 딜레이', step: 50, unit: 'ms' },
+    lockResets:        { label: '무브 리셋', step: 1, unit: '회' },
+    nextCount:         { label: '넥스트 개수', step: 1, unit: '개' },
+    allowHold:         { label: '홀드 허용' },
+    garbageMultiplier: { label: '가비지 배율', step: 0.1, unit: '×' },
+    garbageDelayMs:    { label: '가비지 지연', step: 50, unit: 'ms', hint: '상쇄 가능 시간' },
+    garbageCap:        { label: '가비지 상한', step: 1, unit: '줄', hint: '착지 1회당' },
+    garbageHoleRepeat: { label: '구멍 유지 확률', step: 0.05 }
+  };
+  var RULE_ORDER = ['ft', 'maxPlayers', 'targeting', 'gravity', 'gravityIncrease',
+    'gravityEvery', 'lockDelay', 'lockResets', 'nextCount', 'allowHold',
+    'garbageMultiplier', 'garbageDelayMs', 'garbageCap', 'garbageHoleRepeat'];
+
+  function formatRule(key, value) {
+    var meta = RULE_META[key] || {};
+    var spec = (window.RULE_SCHEMA || {})[key] || {};
+    if (spec.type === 'bool') return value ? 'ON' : 'OFF';
+    if (spec.type === 'enum') return (meta.names && meta.names[value]) || value;
+    var text = spec.type === 'int' ? String(value) : String(Math.round(Number(value) * 100) / 100);
+    return text + (meta.unit ? ' ' + meta.unit : '');
+  }
 
   /* ------------------------------------------------------------ screens */
 
@@ -229,7 +265,7 @@ var App = (function () {
     if (status.matched) {
       stopQueue();
       U.$('#queue-title').textContent = '매치 성사!';
-      enterRoom(status.room, true);
+      enterRoom(status.room, true, 'player');
       return true;
     }
     paintQueue(status);
@@ -299,16 +335,40 @@ var App = (function () {
       var btn = this;
       btn.disabled = true;
       Net.roomCreate(pendingRoomConfig).then(function (res) {
-        enterRoom(res.room, false);
+        enterRoom(res.room, false, 'player');
       }).catch(function (err) {
         U.toast(err.message, 'error');
       }).then(function () { btn.disabled = false; });
     });
 
-    U.$('#btn-join-code').addEventListener('click', joinByCode);
+    U.$('#btn-join-code').addEventListener('click', function () { joinByCode(false); });
+    U.$('#btn-spectate-code').addEventListener('click', function () { joinByCode(true); });
     U.$('#join-code').addEventListener('keydown', function (e) {
       e.stopPropagation();
-      if (e.key === 'Enter') joinByCode();
+      if (e.key === 'Enter') joinByCode(false);
+    });
+
+    U.$('#cfg-targeting').addEventListener('click', function () {
+      var values = ((window.RULE_SCHEMA || {}).targeting || {}).values || ['random'];
+      var at = values.indexOf(pendingRoomConfig.targeting);
+      pendingRoomConfig.targeting = values[(at + 1) % values.length];
+      this.textContent = RULE_META.targeting.names[pendingRoomConfig.targeting] ||
+                         pendingRoomConfig.targeting;
+    });
+
+    U.$('#btn-chat-send').addEventListener('click', sendChat);
+    U.$('#chat-input').addEventListener('keydown', function (e) {
+      e.stopPropagation();
+      if (e.key === 'Enter') sendChat();
+    });
+
+    U.$('#btn-toggle-seat').addEventListener('click', function () {
+      var room = Game.state().room;
+      if (!room) return;
+      var toSpectator = !Game.isSpectating();
+      Net.roomJoin(room.code, toSpectator).then(function (res) {
+        enterRoom(res.room, false, res.role, null);
+      }).catch(function (err) { U.toast(err.message, 'error'); });
     });
     U.$('#btn-refresh-rooms').addEventListener('click', loadRooms);
     U.$('#btn-leave-room').addEventListener('click', function () {
@@ -328,11 +388,11 @@ var App = (function () {
     });
   }
 
-  function joinByCode() {
+  function joinByCode(spectate) {
     var code = U.$('#join-code').value.trim().toUpperCase();
     if (code.length < 3) { U.toast('코드를 입력하세요.', 'error'); return; }
-    Net.roomJoin(code).then(function (res) {
-      enterRoom(res.room, false);
+    Net.roomJoin(code, spectate).then(function (res) {
+      enterRoom(res.room, false, res.role, res.reason);
     }).catch(function (err) { U.toast(err.message, 'error'); });
   }
 
@@ -347,18 +407,24 @@ var App = (function () {
         return;
       }
       res.rooms.forEach(function (r) {
+        var live = r.state !== 'lobby' && r.state !== 'matchover';
+        var full = r.players >= r.max;
         var node = U.el('div', {
           class: 'menu-item',
-          style: '--item-color:#b455e5',
+          style: '--item-color:' + (live ? '#46d17f' : '#b455e5'),
           html: '<div class="menu-icon">' + U.escapeHtml(r.code.slice(0, 2)) + '</div>' +
                 '<div class="menu-text"><div class="menu-title" style="font-size:18px">' +
                 U.escapeHtml(r.name) + '</div><div class="menu-desc">' +
-                'FT' + r.ft + ' · ' + (r.state === 'lobby' ? '대기 중' : '경기 중') + '</div></div>' +
-                '<div class="menu-meta">' + r.players + '/' + r.max + '</div>'
+                'FT' + r.ft + ' · ' + (RULE_META.targeting.names[r.targeting] || r.targeting) +
+                ' · ' + (live ? '경기 중' : '대기 중') +
+                (r.spectators ? ' · 관전 ' + r.spectators + '명' : '') + '</div></div>' +
+                '<div class="menu-meta">' + r.players + '/' + r.max +
+                '<br><span class="faint">' + (live || full ? '관전으로 입장' : '참가') + '</span></div>'
         });
         node.addEventListener('click', function () {
-          Net.roomJoin(r.code).then(function (res2) { enterRoom(res2.room, false); })
-            .catch(function (err) { U.toast(err.message, 'error'); });
+          Net.roomJoin(r.code, live || full).then(function (res2) {
+            enterRoom(res2.room, false, res2.role, res2.reason);
+          }).catch(function (err) { U.toast(err.message, 'error'); });
         });
         host.appendChild(node);
       });
@@ -368,29 +434,39 @@ var App = (function () {
     });
   }
 
-  function enterRoom(room, autoReady) {
-    Game.startVersus(room);
-    Game.setReady(!!autoReady);
+  function enterRoom(room, autoReady, role, reason) {
+    var spectating = role === 'spectator';
+    chatHistory = [];
+    Game.startVersus(room, spectating);
+    Game.setReady(!spectating && !!autoReady);
     showScreen('room');
-    renderRoom(room, {}, !!autoReady);
-    U.$('#room-hint').textContent = autoReady
-      ? '상대가 준비되면 자동으로 시작합니다.'
-      : '모든 플레이어가 준비하면 시작합니다.';
+    renderRoom(room, {}, Game.isReady());
+    renderChat();
+
+    if (spectating) {
+      U.$('#room-hint').textContent = '관전 중입니다. 자리가 나면 참가할 수 있습니다.';
+      if (reason === 'full') U.toast('방이 가득 차 관전으로 입장했습니다.');
+      else if (reason === 'in-progress') U.toast('경기가 진행 중이라 관전으로 입장했습니다.');
+    } else {
+      U.$('#room-hint').textContent = autoReady
+        ? '상대가 준비되면 자동으로 시작합니다.'
+        : '모든 플레이어가 준비하면 시작합니다.';
+    }
   }
 
   function renderRoom(room, opponents, ready) {
+    var myId = Net.creds().id;
+    var spectating = Game.isSpectating();
+    var isHost = room.host === myId;
+
     U.$('#room-title').textContent = room.mode === 'ranked' ? 'Ranked Match' : 'Room';
     U.$('#room-code-badge').textContent = room.code;
     U.$('#room-code-big').textContent = room.code;
     U.$('#room-mode-badge').textContent = room.mode === 'ranked' ? 'RANKED' : 'CASUAL';
-    U.$('#room-ft').textContent = room.config.ft;
-    U.$('#room-max').textContent = room.config.maxPlayers;
-    U.$('#room-ranked').textContent = room.mode === 'ranked' ? '예' : '아니오';
     U.$('#room-count').textContent = '(' + room.players.length + '/' + room.config.maxPlayers + ')';
 
     var host = U.$('#room-players');
     U.clear(host);
-    var myId = Net.creds().id;
     room.players.forEach(function (p) {
       var isMe = p.id === myId;
       var isReady = isMe ? ready : !!(opponents[p.id] && opponents[p.id].ready);
@@ -403,8 +479,11 @@ var App = (function () {
         badge,
         U.el('div', {
           class: 'switch-label grow',
-          html: '<b>' + U.escapeHtml(p.name) + (isMe ? ' <span class="badge">나</span>' : '') + '</b>' +
-                '<small>' + Math.round(p.tr).toLocaleString() + ' TR · ' + p.rank + '</small>'
+          html: '<b>' + U.escapeHtml(p.name) +
+                (isMe ? ' <span class="badge">나</span>' : '') +
+                (p.id === room.host ? ' <span class="badge hot">방장</span>' : '') + '</b>' +
+                '<small>' + Math.round(p.tr).toLocaleString() + ' TR · ' + p.rank +
+                (p.ko ? ' · ' + p.ko + ' KO' : '') + '</small>'
         }),
         U.el('span', {
           class: 'badge ' + (isReady ? 'live' : ''),
@@ -412,11 +491,175 @@ var App = (function () {
         })
       ]));
     });
+
+    var bench = room.spectators || [];
+    U.$('#room-spectator-count').textContent = '(' + bench.length + ')';
+    var benchHost = U.$('#room-spectators');
+    U.clear(benchHost);
+    if (!bench.length) {
+      benchHost.appendChild(U.el('span', { class: 'hint', text: '없음' }));
+    } else {
+      bench.forEach(function (v) {
+        benchHost.appendChild(U.el('span', {
+          class: 'badge' + (v.id === myId ? ' hot' : ''),
+          text: v.name, style: 'margin:0 4px 4px 0'
+        }));
+      });
+    }
+
+    buildRuleEditor(room, isHost);
+
+    var seatBtn = U.$('#btn-toggle-seat');
+    var canSit = room.players.length < room.config.maxPlayers &&
+                 (room.state === 'lobby' || room.state === 'matchover');
+    seatBtn.style.display = room.mode === 'ranked' ? 'none' : 'block';
+    seatBtn.textContent = spectating ? '자리에 앉기' : '관전으로 전환';
+    seatBtn.disabled = spectating && !canSit;
+
     paintReadyButton();
+  }
+
+  /**
+   * Builds the room rule list. The host gets controls; everyone else sees the
+   * same rows read-only, so both sides are always looking at the same rules.
+   */
+  function buildRuleEditor(room, isHost) {
+    var host = U.$('#room-rules');
+    var schema = window.RULE_SCHEMA || {};
+    U.clear(host);
+    U.$('#room-rules-owner').textContent = isHost ? '(방장만 변경 가능)' : '(방장이 설정)';
+
+    RULE_ORDER.forEach(function (key) {
+      var spec = schema[key];
+      if (!spec) return;
+      var meta = RULE_META[key] || {};
+      var value = room.config[key];
+
+      var name = U.el('div', {
+        class: 'rule-name',
+        html: '<b>' + U.escapeHtml(meta.label || key) + '</b>' +
+              (meta.hint ? '<small>' + U.escapeHtml(meta.hint) + '</small>' : '')
+      });
+
+      var control;
+      if (!isHost || room.mode === 'ranked') {
+        control = U.el('div', { class: 'rule-value', text: formatRule(key, value) });
+      } else if (spec.type === 'bool') {
+        control = U.el('button', {
+          class: 'btn sm' + (value ? ' primary' : ''),
+          text: formatRule(key, value),
+          onclick: function () { commitRule(key, !value); }
+        });
+      } else if (spec.type === 'enum') {
+        control = U.el('button', {
+          class: 'btn sm',
+          text: formatRule(key, value),
+          onclick: function () {
+            var at = spec.values.indexOf(value);
+            commitRule(key, spec.values[(at + 1) % spec.values.length]);
+          }
+        });
+      } else {
+        var step = meta.step || 1;
+        var display = U.el('div', { class: 'value', text: formatRule(key, value) });
+        control = U.el('div', { class: 'stepper' }, [
+          U.el('button', { text: '−', onclick: function () { nudgeRule(key, -step); } }),
+          display,
+          U.el('button', { text: '+', onclick: function () { nudgeRule(key, step); } })
+        ]);
+      }
+
+      host.appendChild(U.el('div', {
+        class: 'rule-row' + (isHost && room.mode !== 'ranked' ? '' : ' locked')
+      }, [name, control]));
+    });
+  }
+
+  function nudgeRule(key, delta) {
+    var room = Game.state().room;
+    if (!room) return;
+    var spec = (window.RULE_SCHEMA || {})[key] || {};
+    var next = Number(room.config[key]) + delta;
+    if (spec.min !== undefined) next = Math.max(spec.min, next);
+    if (spec.max !== undefined) next = Math.min(spec.max, next);
+    next = Math.round(next * 1000) / 1000;
+    commitRule(key, next);
+  }
+
+  /** Optimistic: paint the change immediately, let the server confirm. */
+  function commitRule(key, value) {
+    var room = Game.state().room;
+    if (!room) return;
+    room.config[key] = value;
+    buildRuleEditor(room, room.host === Net.creds().id);
+    var patch = {};
+    patch[key] = value;
+    Net.roomConfig(room.code, patch).then(function (res) {
+      Game.state().room = res.room;
+      buildRuleEditor(res.room, res.room.host === Net.creds().id);
+    }).catch(function (err) {
+      U.toast(err.message, 'error');
+    });
+  }
+
+  /* ------------------------------------------------------------------ chat */
+
+  function onChat(messages) {
+    var inGame = current === 'game';
+    messages.forEach(function (m) {
+      chatHistory.push(m);
+      if (inGame && m.id !== Net.creds().id) {
+        U.toast(m.name + ': ' + m.text, null, 4000);
+      }
+    });
+    if (chatHistory.length > CHAT_KEEP) chatHistory = chatHistory.slice(-CHAT_KEEP);
+    renderChat();
+  }
+
+  function renderChat() {
+    var log = U.$('#chat-log');
+    if (!log) return;
+    var pinned = log.scrollTop + log.clientHeight >= log.scrollHeight - 24;
+    U.clear(log);
+    if (!chatHistory.length) {
+      log.appendChild(U.el('p', { class: 'hint', text: '아직 대화가 없습니다.' }));
+      return;
+    }
+    var myId = Net.creds() && Net.creds().id;
+    chatHistory.forEach(function (m) {
+      var when = new Date(Number(m.ts));
+      log.appendChild(U.el('div', {
+        class: 'chat-msg' + (m.id === myId ? ' mine' : '') + (m.spectator ? ' spectator' : ''),
+        html: '<span class="when">' +
+              String(when.getHours()).padStart(2, '0') + ':' +
+              String(when.getMinutes()).padStart(2, '0') + '</span>' +
+              '<span class="who">' + U.escapeHtml(m.name) + '</span>' +
+              U.escapeHtml(m.text)
+      }));
+    });
+    if (pinned) log.scrollTop = log.scrollHeight;
+  }
+
+  function sendChat() {
+    var input = U.$('#chat-input');
+    var text = input.value.trim();
+    if (!text) return;
+    var room = Game.state().room;
+    if (!room) { U.toast('방에 있을 때만 사용할 수 있습니다.', 'error'); return; }
+    input.value = '';
+    Net.chatSend(room.code, text).catch(function (err) {
+      U.toast(err.message, 'error');
+      input.value = text;
+    });
   }
 
   function paintReadyButton() {
     var btn = U.$('#btn-ready');
+    if (Game.isSpectating()) {
+      btn.style.display = 'none';
+      return;
+    }
+    btn.style.display = 'block';
     var ready = Game.isReady();
     btn.textContent = ready ? '준비 완료 — 취소하려면 클릭' : '준비';
     btn.classList.toggle('primary', !ready);
@@ -604,7 +847,9 @@ var App = (function () {
 
   function requestExit() {
     if (current === 'game') {
-      if (Game.state().isOnline) {
+      if (Game.isSpectating()) {
+        showScreen('room');           // watching costs nothing to step away from
+      } else if (Game.state().isOnline) {
         confirmForfeit();
       } else {
         exitToMenu();
@@ -678,6 +923,7 @@ var App = (function () {
     updateProfile: updateProfile,
     refreshProfile: refreshProfile,
     renderRoom: renderRoom,
+    onChat: onChat,
     requestExit: requestExit,
     exitToMenu: exitToMenu
   };

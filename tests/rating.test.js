@@ -73,13 +73,63 @@ t('lower deviation pushes a strong player further up', () => {
 });
 
 section('match rating');
-t('an FT3 sweep moves more than a 3-2 win', () => {
+t('only the match outcome counts, not the round score', () => {
   const a = { glicko: 1500, rd: 120, vol: 0.06 };
   const b = { glicko: 1500, rd: 120, vol: 0.06 };
   const sweep = Glicko_rateMatch(a, b, 3, 0);
   const close32 = Glicko_rateMatch(a, b, 3, 2);
   note('3-0 -> ' + sweep.p1.glicko.toFixed(1) + ',  3-2 -> ' + close32.p1.glicko.toFixed(1));
-  if (!(sweep.p1.glicko > close32.p1.glicko)) throw new Error('sweep did not gain more');
+  close(sweep.p1.glicko, close32.p1.glicko, 0.001, 'round score must not change the rating');
+});
+
+t('winning a match never costs the winner rating', () => {
+  // The regression this guards: rating each round separately made a heavy
+  // favourite lose TR for a 3-1 win (-178 TR) because 75% fell short of their
+  // 90% expected round win rate. Rating the match outcome alone fixes that.
+  //
+  // TR is allowed a hair of slack. It folds RD into the number, and a win
+  // against someone hundreds of points below carries so little information
+  // that RD grows slightly — worth about half a TR point on a 1200-point
+  // mismatch, and invisible once rounded for display.
+  const TR_SLACK = 1;
+  const matchups = [[1500, 1500], [1900, 1500], [1500, 1900], [2400, 1200]];
+  const scores = [[3, 0], [3, 1], [3, 2]];
+  matchups.forEach(function (pair) {
+    scores.forEach(function (score) {
+      const winner = { glicko: pair[0], rd: 60, vol: 0.06 };
+      const loser = { glicko: pair[1], rd: 60, vol: 0.06 };
+      const res = Glicko_rateMatch(winner, loser, score[0], score[1]);
+      const label = pair[0] + ' beat ' + pair[1] + ' ' + score.join('-');
+      // The rating must rise. TR only has to not fall: a 1200-point favourite
+      // gains so little that the displayed value can round to the same number.
+      if (!(res.p1.glicko > winner.glicko)) {
+        throw new Error(label + ' but rating went ' + winner.glicko + ' -> ' + res.p1.glicko);
+      }
+      if (!(res.p2.glicko < loser.glicko)) {
+        throw new Error(label + ' but the loser gained rating');
+      }
+      const before = Glicko_toTR(winner.glicko, winner.rd);
+      const after = Glicko_toTR(res.p1.glicko, res.p1.rd);
+      if (after < before - TR_SLACK) {
+        throw new Error(label + ' but TR fell ' + before.toFixed(1) + ' -> ' + after.toFixed(1));
+      }
+      if (Glicko_toTR(res.p2.glicko, res.p2.rd) > Glicko_toTR(loser.glicko, loser.rd) + TR_SLACK) {
+        throw new Error(label + ' but the loser gained TR');
+      }
+    });
+  });
+  const heavy = Glicko_rateMatch({ glicko: 1900, rd: 60, vol: 0.06 }, { glicko: 1500, rd: 60, vol: 0.06 }, 3, 2);
+  note('favourite beating an underdog 3-2: +' +
+    Math.round(Glicko_toTR(heavy.p1.glicko, heavy.p1.rd) - Glicko_toTR(1900, 60)) + ' TR');
+});
+
+t('an upset still pays far more than an expected win', () => {
+  const upset = Glicko_rateMatch({ glicko: 1500, rd: 60, vol: 0.06 }, { glicko: 1900, rd: 60, vol: 0.06 }, 3, 1);
+  const expected = Glicko_rateMatch({ glicko: 1900, rd: 60, vol: 0.06 }, { glicko: 1500, rd: 60, vol: 0.06 }, 3, 1);
+  const upsetGain = Glicko_toTR(upset.p1.glicko, upset.p1.rd) - Glicko_toTR(1500, 60);
+  const expectedGain = Glicko_toTR(expected.p1.glicko, expected.p1.rd) - Glicko_toTR(1900, 60);
+  note('upset +' + Math.round(upsetGain) + ' TR vs expected win +' + Math.round(expectedGain) + ' TR');
+  if (!(upsetGain > expectedGain * 4)) throw new Error('upset was not rewarded enough');
 });
 
 t('the two sides move in opposite directions', () => {

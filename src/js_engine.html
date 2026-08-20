@@ -173,6 +173,7 @@ Engine.prototype.reset = function (seed) {
   this.b2b = -1;                // -1 = no back-to-back chain
   this.pendingGarbage = [];     // {amount, at, col}
   this.lastGarbageCol = -1;
+  this.lastAttacker = null;     // who last sent us garbage, for KO credit
   this.attackSeq = 0;
   this.outbox = [];             // attacks to be shipped by the net layer
 
@@ -547,6 +548,7 @@ Engine.prototype.receiveGarbage = function (amount, source) {
     col = Math.floor(this.garbageRng() * BOARD_W);
   }
   this.lastGarbageCol = col;
+  if (source) this.lastAttacker = source;
   this.pendingGarbage.push({ amount: amount, at: Date.now(), col: col, source: source || null });
   this.stats.received += amount;
   this.emit('garbagequeued', { amount: amount });

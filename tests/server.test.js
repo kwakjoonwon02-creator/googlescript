@@ -308,15 +308,26 @@ t('a rematch runs once both ready up against the new epoch', () => {
 });
 
 section('custom rooms');
-t('create, join by code, and reject a full room', () => {
+t('create and join by code', () => {
   const s = makeSandbox();
-  const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo'), c = newPlayer(s, 'Charlie');
+  const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo');
   const room = ok(s.rpc('roomCreate', { id: a.id, token: a.token, config: { ft: 5, maxPlayers: 2 } })).room;
   eq(room.config.ft, 5, 'ft honoured');
+  const joined = ok(s.rpc('roomJoin', { id: b.id, token: b.token, code: room.code }));
+  eq(joined.role, 'player', 'second player gets a seat');
+  eq(joined.room.players.length, 2, 'two seats');
+});
+
+t('a full room seats the next arrival as a spectator instead of refusing', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo'), c = newPlayer(s, 'Charlie');
+  const room = ok(s.rpc('roomCreate', { id: a.id, token: a.token, config: { maxPlayers: 2 } })).room;
   ok(s.rpc('roomJoin', { id: b.id, token: b.token, code: room.code }));
-  const third = s.rpc('roomJoin', { id: c.id, token: c.token, code: room.code });
-  eq(third.ok, false, 'third player should be refused');
-  assert(/가득/.test(third.error), 'unexpected error: ' + third.error);
+  const third = ok(s.rpc('roomJoin', { id: c.id, token: c.token, code: room.code }));
+  eq(third.role, 'spectator', 'third player should land on the bench');
+  eq(third.reason, 'full', 'reason reported');
+  eq(third.room.players.length, 2, 'seats unchanged');
+  eq(third.room.spectators.length, 1, 'one spectator');
 });
 
 t('public rooms are listed, private ones are not', () => {
@@ -422,6 +433,238 @@ t('solo runs record personal bests without touching TR', () => {
   }));
   eq(res.profile.blitzBest, 45000, 'blitz best stored');
   eq(res.profile.totalLines, 140, 'lifetime lines accumulate');
+});
+
+section('spectating');
+
+t('a spectator sees every board and never affects the match', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo'), watcher = newPlayer(s, 'Watcher');
+  const room = ok(s.rpc('roomCreate', { id: a.id, token: a.token, config: { maxPlayers: 2 } })).room;
+  ok(s.rpc('roomJoin', { id: b.id, token: b.token, code: room.code }));
+  const joined = ok(s.rpc('roomJoin', { id: watcher.id, token: watcher.token, code: room.code, spectate: true }));
+  eq(joined.role, 'spectator', 'asked to spectate');
+
+  // Both players ready up. The spectator publishes no readiness at all, and
+  // the match must still start.
+  sync(s, a, room.code, { ready: true });
+  let r = sync(s, b, room.code, { ready: true });
+  eq(r.room.state, 'countdown', 'spectator must not block the start');
+
+  const view = ok(s.rpc('sync', {
+    id: watcher.id, token: watcher.token, code: room.code, state: baseState({ ready: true })
+  }));
+  eq(view.role, 'spectator', 'reported as spectator');
+  eq(view.others.length, 2, 'a spectator sees both players');
+  assert(view.others.some(o => o.name === 'Alpha'), 'Alpha missing');
+  assert(view.others.some(o => o.name === 'Bravo'), 'Bravo missing');
+  eq(view.room.players.length, 2, 'spectator is not a player');
+});
+
+t('a spectator that claims to be ready cannot start a match alone', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha'), watcher = newPlayer(s, 'Watcher');
+  const room = ok(s.rpc('roomCreate', { id: a.id, token: a.token, config: { maxPlayers: 2 } })).room;
+  ok(s.rpc('roomJoin', { id: watcher.id, token: watcher.token, code: room.code, spectate: true }));
+  sync(s, a, room.code, { ready: true });
+  const r = ok(s.rpc('sync', {
+    id: watcher.id, token: watcher.token, code: room.code, state: baseState({ ready: true })
+  }));
+  eq(r.room.state, 'lobby', 'one player plus a spectator is not two players');
+});
+
+t('a spectator can take an open seat, and a player can move to the bench', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo');
+  const room = ok(s.rpc('roomCreate', { id: a.id, token: a.token, config: { maxPlayers: 2 } })).room;
+  let r = ok(s.rpc('roomJoin', { id: b.id, token: b.token, code: room.code, spectate: true }));
+  eq(r.role, 'spectator');
+  r = ok(s.rpc('roomJoin', { id: b.id, token: b.token, code: room.code }));
+  eq(r.role, 'player', 'spectator should be able to sit down');
+  eq(r.room.spectators.length, 0, 'bench cleared');
+  r = ok(s.rpc('roomJoin', { id: b.id, token: b.token, code: room.code, spectate: true }));
+  eq(r.role, 'spectator', 'player should be able to stand up');
+  eq(r.room.players.length, 1, 'seat released');
+});
+
+t('a room with only spectators left is torn down when the last player leaves', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha'), watcher = newPlayer(s, 'Watcher');
+  const room = ok(s.rpc('roomCreate', { id: a.id, token: a.token, config: {} })).room;
+  ok(s.rpc('roomJoin', { id: watcher.id, token: watcher.token, code: room.code, spectate: true }));
+  ok(s.rpc('roomLeave', { id: a.id, token: a.token, code: room.code }));
+  // The room survives for the spectator rather than vanishing mid-view.
+  const r = ok(s.rpc('sync', {
+    id: watcher.id, token: watcher.token, code: room.code, state: baseState()
+  }));
+  eq(r.room.players.length, 0, 'no players left');
+  ok(s.rpc('roomLeave', { id: watcher.id, token: watcher.token, code: room.code }));
+  const gone = s.rpc('sync', {
+    id: watcher.id, token: watcher.token, code: room.code, state: baseState()
+  });
+  eq(gone.ok, false, 'room should be gone once everyone left');
+});
+
+t('a room that outlives its host hands the settings to whoever sits down', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha'), watcher = newPlayer(s, 'Watcher');
+  const room = ok(s.rpc('roomCreate', { id: a.id, token: a.token, config: {} })).room;
+  eq(room.host, a.id, 'creator hosts');
+  ok(s.rpc('roomJoin', { id: watcher.id, token: watcher.token, code: room.code, spectate: true }));
+  ok(s.rpc('roomLeave', { id: a.id, token: a.token, code: room.code }));
+
+  const seated = ok(s.rpc('roomJoin', { id: watcher.id, token: watcher.token, code: room.code }));
+  eq(seated.role, 'player', 'spectator takes the empty seat');
+  eq(seated.room.host, watcher.id, 'and becomes the host');
+  const changed = ok(s.rpc('roomConfig', {
+    id: watcher.id, token: watcher.token, code: room.code, config: { ft: 5 }
+  })).room;
+  eq(changed.config.ft, 5, 'new host can change the rules');
+});
+
+section('chat');
+
+t('messages are delivered to everyone in the room, once', () => {
+  const s = makeSandbox();
+  const { a, b, code } = pairUp(s);
+  ok(s.rpc('chatSend', { id: a.id, token: a.token, code, text: '안녕' }));
+  const r = sync(s, b, code, {});
+  eq(r.chat.length, 1, 'one message');
+  eq(r.chat[0].text, '안녕', 'text');
+  eq(r.chat[0].name, 'Alpha', 'author');
+  // chatSince acknowledges what we already have.
+  const again = ok(s.rpc('sync', {
+    id: b.id, token: b.token, code, state: baseState(), chatSince: r.chat[0].i
+  }));
+  eq(again.chat.length, 0, 'already-seen messages are not resent');
+});
+
+t('spectators can chat and are marked as such', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha'), watcher = newPlayer(s, 'Watcher');
+  const room = ok(s.rpc('roomCreate', { id: a.id, token: a.token, config: {} })).room;
+  ok(s.rpc('roomJoin', { id: watcher.id, token: watcher.token, code: room.code, spectate: true }));
+  ok(s.rpc('chatSend', { id: watcher.id, token: watcher.token, code: room.code, text: 'gl hf' }));
+  const r = sync(s, a, room.code, {});
+  eq(r.chat.length, 1, 'delivered');
+  eq(r.chat[0].spectator, true, 'flagged as a spectator message');
+});
+
+t('chat is rate limited, length capped and stripped of control characters', () => {
+  const s = makeSandbox();
+  const { a, code } = pairUp(s);
+  ok(s.rpc('chatSend', { id: a.id, token: a.token, code, text: 'one' }));
+  const tooFast = s.rpc('chatSend', { id: a.id, token: a.token, code, text: 'two' });
+  eq(tooFast.ok, false, 'second message should be throttled');
+
+  s.__clock.advance(2000);
+  ok(s.rpc('chatSend', { id: a.id, token: a.token, code, text: 'a\u0000b\nc   d' }));
+  s.__clock.advance(2000);
+  ok(s.rpc('chatSend', { id: a.id, token: a.token, code, text: 'x'.repeat(500) }));
+
+  const r = sync(s, a, code, {});
+  const stripped = r.chat[1];
+  eq(stripped.text, 'a b c d', 'control characters and runs of whitespace collapsed');
+  eq(r.chat[2].text.length, 200, 'length capped');
+
+  s.__clock.advance(2000);
+  eq(s.rpc('chatSend', { id: a.id, token: a.token, code, text: '   ' }).ok, false, 'empty message refused');
+});
+
+t('history is capped so the room entry cannot grow without bound', () => {
+  const s = makeSandbox();
+  const { a, code } = pairUp(s);
+  for (let i = 0; i < 60; i++) {
+    s.__clock.advance(1000);
+    ok(s.rpc('chatSend', { id: a.id, token: a.token, code, text: 'msg' + i }));
+  }
+  const r = sync(s, a, code, {});
+  assert(r.chat.length <= 40, 'history not capped: ' + r.chat.length);
+  eq(r.chat[r.chat.length - 1].text, 'msg59', 'newest kept');
+});
+
+t('someone outside the room cannot post to it', () => {
+  const s = makeSandbox();
+  const { code } = pairUp(s);
+  const outsider = newPlayer(s, 'Outsider');
+  const res = s.rpc('chatSend', { id: outsider.id, token: outsider.token, code, text: 'hello' });
+  eq(res.ok, false, 'should be refused');
+});
+
+section('room rules');
+
+t('the host can set every rule, and values are clamped to their range', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha');
+  const room = ok(s.rpc('roomCreate', {
+    id: a.id, token: a.token,
+    config: { gravity: 3, lockDelay: 250, nextCount: 2, allowHold: false, targeting: 'badges' }
+  })).room;
+  eq(room.config.gravity, 3, 'gravity');
+  eq(room.config.lockDelay, 250, 'lock delay');
+  eq(room.config.nextCount, 2, 'preview count');
+  eq(room.config.allowHold, false, 'hold disabled');
+  eq(room.config.targeting, 'badges', 'targeting');
+
+  const clamped = ok(s.rpc('roomConfig', {
+    id: a.id, token: a.token, code: room.code,
+    config: { nextCount: 99, gravity: -5, lockDelay: 999999, garbageCap: 0 }
+  })).room;
+  eq(clamped.config.nextCount, 6, 'preview clamped to the maximum');
+  eq(clamped.config.gravity, 0.1, 'gravity clamped to the minimum');
+  eq(clamped.config.lockDelay, 3000, 'lock delay clamped');
+  eq(clamped.config.garbageCap, 1, 'garbage cap clamped');
+});
+
+t('nonsense rule values fall back rather than corrupting the room', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha');
+  const room = ok(s.rpc('roomCreate', {
+    id: a.id, token: a.token,
+    config: { gravity: 'fast', targeting: 'nonsense', nextCount: null, bogusKey: 42 }
+  })).room;
+  eq(room.config.gravity, 1, 'default gravity');
+  eq(room.config.targeting, 'random', 'unknown strategy rejected');
+  eq(room.config.nextCount, 5, 'default preview');
+  assert(room.config.bogusKey === undefined, 'unknown keys must not be stored');
+});
+
+t('the rule schema is published so the client can build its editor', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha');
+  const boot = ok(s.rpc('bootstrap', { id: a.id, token: a.token }));
+  assert(boot.rules, 'no rule schema in bootstrap');
+  eq(boot.rules.targeting.type, 'enum', 'targeting is an enum');
+  eq(boot.rules.targeting.values.length, 4, 'four targeting strategies');
+  eq(boot.rules.nextCount.max, 6, 'preview range');
+  eq(boot.rules.allowHold.type, 'bool', 'hold is a toggle');
+});
+
+section('knockouts');
+
+t('an elimination is credited to whoever last sent the garbage', () => {
+  const s = makeSandbox();
+  const { a, b, code } = pairUp(s);
+  sync(s, a, code, { ready: true });
+  let r = sync(s, b, code, { ready: true });
+  s.__clock.set(r.room.startAt + 10);
+  sync(s, a, code, { ready: true, round: 1 });
+  r = sync(s, b, code, { ready: true, round: 1, alive: false, killer: a.id });
+  eq(r.room.state, 'roundover', 'round ended');
+  const attacker = r.room.players.filter(p => p.id === a.id)[0];
+  eq(attacker.ko, 1, 'knockout credited');
+});
+
+t('topping yourself out is nobody\'s knockout', () => {
+  const s = makeSandbox();
+  const { a, b, code } = pairUp(s);
+  sync(s, a, code, { ready: true });
+  let r = sync(s, b, code, { ready: true });
+  s.__clock.set(r.room.startAt + 10);
+  sync(s, a, code, { ready: true, round: 1 });
+  r = sync(s, b, code, { ready: true, round: 1, alive: false, killer: b.id });
+  eq(r.room.players.filter(p => p.id === a.id)[0].ko, 0, 'no credit for a self-inflicted top-out');
+  eq(r.room.players.filter(p => p.id === b.id)[0].ko, 0, 'and none for the victim either');
 });
 
 process.exit(finish() ? 0 : 1);

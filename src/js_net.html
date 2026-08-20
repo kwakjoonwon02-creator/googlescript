@@ -68,6 +68,7 @@ var Net = (function () {
       data.ranks.ladder.forEach(function (r) { window.RANK_COLORS[r.name] = r.color; });
       window.RANK_COLORS[data.ranks.unranked.name] = data.ranks.unranked.color;
       window.RANK_TABLE = data.ranks;
+      window.RULE_SCHEMA = data.rules || {};
       return data;
     });
   }
@@ -80,10 +81,10 @@ var Net = (function () {
    * One versus tick. Silently drops the call if the previous one has not
    * come back yet, so a slow round trip cannot pile up requests.
    */
-  function sync(code, state) {
+  function sync(code, state, chatSince) {
     if (syncInFlight) return Promise.resolve(null);
     syncInFlight = true;
-    return call('sync', authed({ code: code, state: state }))
+    return call('sync', authed({ code: code, state: state, chatSince: chatSince || 0 }))
       .then(function (data) { syncInFlight = false; return data; })
       .catch(function (err) { syncInFlight = false; throw err; });
   }
@@ -111,7 +112,10 @@ var Net = (function () {
     queuePoll: function () { return call('queuePoll', authed({})); },
     queueLeave: function () { return call('queueLeave', authed({})); },
     roomCreate: function (config) { return call('roomCreate', authed({ config: config })); },
-    roomJoin: function (code) { return call('roomJoin', authed({ code: code })); },
+    roomJoin: function (code, spectate) {
+      return call('roomJoin', authed({ code: code, spectate: !!spectate }));
+    },
+    chatSend: function (code, text) { return call('chatSend', authed({ code: code, text: text })); },
     roomLeave: function (code) { return call('roomLeave', authed({ code: code })); },
     roomList: function () { return call('roomList', authed({})); },
     roomConfig: function (code, config) { return call('roomConfig', authed({ code: code, config: config })); }

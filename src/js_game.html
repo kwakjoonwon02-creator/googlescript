@@ -26,6 +26,11 @@ var Game = (function () {
     myAttackLog: [],
     attackSeq: 0,
     applied: {},                // opponentId -> highest applied attack index
+    sentTo: {},                 // opponentId -> lines sent, for 'even' targeting
+    attackedMeAt: {},           // opponentId -> last time they hit us
+    spectating: false,
+    chatSince: 0,
+    lastTargetId: null,         // last opponent we actually hit, for the HUD
     lastSyncAt: 0,
     syncErrors: 0,
 
@@ -117,6 +122,21 @@ var Game = (function () {
 
   /* ------------------------------------------------------------- rules */
 
+  /* Room rule -> engine rule. Only the garbage delay is named differently. */
+  var ROOM_RULE_TO_ENGINE = {
+    gravity: 'gravity',
+    gravityIncrease: 'gravityIncrease',
+    gravityEvery: 'gravityEvery',
+    lockDelay: 'lockDelay',
+    lockResets: 'lockResets',
+    nextCount: 'nextCount',
+    allowHold: 'allowHold',
+    garbageMultiplier: 'garbageMultiplier',
+    garbageDelayMs: 'garbageDelay',
+    garbageCap: 'garbageCap',
+    garbageHoleRepeat: 'garbageHoleRepeat'
+  };
+
   function rulesFor(mode, roomConfig) {
     var base = {
       gravity: 1.0,
@@ -124,15 +144,24 @@ var Game = (function () {
       lockResets: 15,
       nextCount: 5,
       allowHold: true,
-      garbageDelay: (roomConfig && roomConfig.garbageDelayMs) || 500,
-      garbageCap: (roomConfig && roomConfig.garbageCap) || 8,
-      garbageMultiplier: (roomConfig && roomConfig.garbageMultiplier) || 1
+      garbageDelay: 500,
+      garbageCap: 8,
+      garbageMultiplier: 1
     };
-    if (mode === 'sprint') return Object.assign(base, { gravity: 1.0 });
-    if (mode === 'blitz') return Object.assign(base, { gravity: 1.0 });
+    if (mode === 'sprint' || mode === 'blitz') return base;
     if (mode === 'zen') return Object.assign(base, { gravity: 0.7, infiniteMode: true });
-    // versus / cpu: gravity creeps up so rounds cannot stall forever
-    return Object.assign(base, { gravity: 1.0, gravityIncrease: 0.45, gravityEvery: 30000 });
+
+    // versus / cpu: gravity creeps up so rounds cannot stall forever, and
+    // whatever the host configured overrides the defaults.
+    Object.assign(base, { gravityIncrease: 0.45, gravityEvery: 30000 });
+    if (roomConfig) {
+      Object.keys(ROOM_RULE_TO_ENGINE).forEach(function (key) {
+        if (roomConfig[key] !== undefined && roomConfig[key] !== null) {
+          base[ROOM_RULE_TO_ENGINE[key]] = roomConfig[key];
+        }
+      });
+    }
+    return base;
   }
 
   var MODE_GOALS = {
@@ -230,8 +259,8 @@ var Game = (function () {
     updateScoreStrip();
   }
 
-  /** Entering an online room (ranked or custom). */
-  function startVersus(room) {
+  /** Entering an online room (ranked or custom), playing or watching. */
+  function startVersus(room, spectating) {
     stop();
     G.mode = 'versus';
     G.isOnline = true;
@@ -241,6 +270,10 @@ var Game = (function () {
     G.applied = {};
     G.myAttackLog = [];
     G.attackSeq = 0;
+    G.sentTo = {};
+    G.attackedMeAt = {};
+    G.spectating = !!spectating;
+    G.chatSince = 0;
     G.phase = 'lobby';
     G.ready = false;
     G.currentRound = 0;
@@ -298,9 +331,9 @@ var Game = (function () {
     var dt = Math.min(80, now - G.lastFrame);
     G.lastFrame = now;
 
-    Input.update(dt);
+    if (!G.spectating) Input.update(dt);
 
-    if (G.phase === 'playing' && G.engine && G.engine.alive) {
+    if (!G.spectating && G.phase === 'playing' && G.engine && G.engine.alive) {
       var sdf = Input.isDown('softDrop') ? CONFIG.sdf : 1;
       G.engine.tick(dt, sdf);
       collectMyAttacks();
@@ -329,6 +362,8 @@ var Game = (function () {
       App.requestExit();
       return;
     }
+    // Watching: the engine exists but is not ours to play.
+    if (G.spectating) return;
     if (!G.engine || G.phase !== 'playing' || !G.engine.alive) {
       if (action === 'retry' && !G.isOnline && G.mode !== 'cpu') startSolo(G.mode);
       return;
@@ -455,54 +490,115 @@ var Game = (function () {
     if (!out.length) return;
     if (G.mode === 'cpu') return;    // handled by updateLocalMatch
     out.forEach(function (a) {
+      var target = pickTarget();
+      if (target) {
+        G.sentTo[target] = (G.sentTo[target] || 0) + a.n;
+        G.lastTargetId = target;
+      }
       // The round is stamped on every event: indices restart each round, so
       // without it a log that has not been refreshed yet would be replayed
       // as phantom garbage at the start of the next one.
-      G.myAttackLog.push({ i: a.i, n: a.n, t: a.t, to: pickTarget(), r: G.currentRound });
+      G.myAttackLog.push({ i: a.i, n: a.n, t: a.t, to: target, r: G.currentRound });
     });
     if (G.myAttackLog.length > 24) G.myAttackLog = G.myAttackLog.slice(-24);
   }
 
-  /** Random living opponent; in 1v1 this is always the same person. */
+  /**
+   * Chooses who an attack lands on. In 1v1 every strategy collapses to the
+   * same person; the differences only matter from three players up.
+   *
+   *   random    — a living opponent at random
+   *   even      — whoever we have sent the least to this round
+   *   attackers — whoever hit us most recently, i.e. fight back
+   *   badges    — whoever has the most knockouts, i.e. gang up on the leader
+   */
   function pickTarget() {
-    var ids = Object.keys(G.opponents).filter(function (id) {
+    var living = Object.keys(G.opponents).filter(function (id) {
       var o = G.opponents[id];
       return o && o.connected && o.alive !== false;
     });
-    if (!ids.length) return null;
-    return ids[Math.floor(Math.random() * ids.length)];
+    if (!living.length) return null;
+    if (living.length === 1) return living[0];
+
+    var strategy = (G.room && G.room.config && G.room.config.targeting) || 'random';
+
+    if (strategy === 'even') {
+      return lowestBy(living, function (id) { return G.sentTo[id] || 0; });
+    }
+    if (strategy === 'attackers') {
+      var recent = living.filter(function (id) { return G.attackedMeAt[id]; });
+      if (recent.length) {
+        return highestBy(recent, function (id) { return G.attackedMeAt[id]; });
+      }
+      return living[Math.floor(Math.random() * living.length)];
+    }
+    if (strategy === 'badges') {
+      return highestBy(living, function (id) {
+        var o = G.opponents[id];
+        return Number(o && o.ko) || 0;
+      });
+    }
+    return living[Math.floor(Math.random() * living.length)];
   }
+
+  /* Ties are broken at random so a strategy never fixates on one player. */
+  function pickExtreme_(ids, score, wantHighest) {
+    var best = null;
+    var tied = [];
+    ids.forEach(function (id) {
+      var value = score(id);
+      if (best === null || (wantHighest ? value > best : value < best)) {
+        best = value;
+        tied = [id];
+      } else if (value === best) {
+        tied.push(id);
+      }
+    });
+    return tied[Math.floor(Math.random() * tied.length)];
+  }
+  function highestBy(ids, score) { return pickExtreme_(ids, score, true); }
+  function lowestBy(ids, score) { return pickExtreme_(ids, score, false); }
 
   function maybeSync(now) {
     var interval = G.phase === 'playing' ? SYNC_INTERVAL : LOBBY_SYNC_INTERVAL;
     if (now - G.lastSyncAt < interval) return;
     G.lastSyncAt = now;
 
-    var e = G.engine;
-    var snap = (G.phase === 'playing' || G.phase === 'roundover') && e ? e.snapshot() : { b: '', p: null, g: 0, alive: true };
-    var rates = matchStats();
+    var state;
+    if (G.spectating) {
+      // A spectator has no board to publish; the server ignores this anyway.
+      state = { spectating: true };
+    } else {
+      var e = G.engine;
+      var snap = (G.phase === 'playing' || G.phase === 'roundover') && e
+        ? e.snapshot()
+        : { b: '', p: null, g: 0, alive: true };
+      var rates = matchStats();
+      var dead = G.phase === 'playing' && e && !e.alive;
 
-    var state = {
-      ready: !!G.ready,
-      epoch: G.room ? Number(G.room.readyEpoch || 1) : 1,
-      round: G.room ? G.room.round : 0,
-      alive: G.phase === 'playing' ? !!(e && e.alive) : true,
-      b: snap.b,
-      p: snap.p,
-      h: snap.h,
-      g: snap.g,
-      atk: G.myAttackLog,
-      stats: {
-        apm: Math.round(rates.apm * 100) / 100,
-        pps: Math.round(rates.pps * 100) / 100,
-        vs: Math.round(rates.vs * 100) / 100,
-        lines: e ? e.stats.lines : 0,
-        pieces: e ? e.stats.pieces : 0,
-        attack: e ? e.stats.attack : 0
-      }
-    };
+      state = {
+        ready: !!G.ready,
+        epoch: G.room ? Number(G.room.readyEpoch || 1) : 1,
+        round: G.room ? G.room.round : 0,
+        alive: G.phase === 'playing' ? !!(e && e.alive) : true,
+        killer: dead ? (e.lastAttacker || null) : null,
+        b: snap.b,
+        p: snap.p,
+        h: snap.h,
+        g: snap.g,
+        atk: G.myAttackLog,
+        stats: {
+          apm: Math.round(rates.apm * 100) / 100,
+          pps: Math.round(rates.pps * 100) / 100,
+          vs: Math.round(rates.vs * 100) / 100,
+          lines: e ? e.stats.lines : 0,
+          pieces: e ? e.stats.pieces : 0,
+          attack: e ? e.stats.attack : 0
+        }
+      };
+    }
 
-    Net.sync(G.roomCode, state).then(function (data) {
+    Net.sync(G.roomCode, state, G.chatSince).then(function (data) {
       if (!data) return;
       G.syncErrors = 0;
       onSync(data);
@@ -526,6 +622,29 @@ var Game = (function () {
     var prev = G.room;
     G.room = room;
 
+    // The server is the authority on whether we hold a seat: getting bumped
+    // to the bench mid-session should switch us to the spectator view.
+    if (data.role) {
+      var nowSpectating = data.role === 'spectator';
+      if (nowSpectating !== G.spectating) {
+        G.spectating = nowSpectating;
+        Input.setEnabled(!nowSpectating);
+        layoutForMode();
+        if (G.room) {
+          renderOpponentShells(G.room.players.filter(function (p) {
+            return G.spectating || p.id !== Net.creds().id;
+          }));
+        }
+      }
+    }
+
+    if (data.chat && data.chat.length) {
+      data.chat.forEach(function (m) {
+        if (Number(m.i) > G.chatSince) G.chatSince = Number(m.i);
+      });
+      App.onChat(data.chat);
+    }
+
     // Track opponents and apply anything they have thrown at us.
     var seen = {};
     data.others.forEach(function (o) {
@@ -538,6 +657,7 @@ var Game = (function () {
       view.tr = o.tr;
       view.wins = o.wins;
       view.connected = o.connected;
+      view.ko = Number(o.ko || 0);
       if (o.state) {
         view.board = o.state.b;
         view.piece = o.state.p;
@@ -572,6 +692,7 @@ var Game = (function () {
       cursor.index = ev.i;
       if (ev.to && ev.to !== myId) return;           // aimed at somebody else
       if (G.phase !== 'playing' || !G.engine.alive) return;
+      G.attackedMeAt[fromId] = Date.now();
       G.engine.receiveGarbage(ev.n, fromId);
     });
   }
@@ -641,7 +762,7 @@ var Game = (function () {
   }
 
   function prepareOnlineRound(room) {
-    Input.setEnabled(true);
+    Input.setEnabled(!G.spectating);
     foldRoundStats();
     if (room.round <= 1) resetMatchAgg();
     G.currentRound = room.round;
@@ -649,10 +770,13 @@ var Game = (function () {
     G.engine.alive = false;
     G.myAttackLog = [];
     G.applied = {};
+    G.sentTo = {};
+    G.attackedMeAt = {};
+    G.lastTargetId = null;
     G.countdownShown = -1;
     clearOverlay();
     renderOpponentShells(room.players.filter(function (p) {
-      return p.id !== Net.creds().id;
+      return G.spectating || p.id !== Net.creds().id;
     }));
     updateScoreStrip();
   }
@@ -660,6 +784,7 @@ var Game = (function () {
   /* ------------------------------------------------------------ drawing */
 
   function draw() {
+    if (G.spectating) { drawSpectated(); return; }
     var canvas = U.$('#board');
     if (!canvas || !G.engine) return;
     Render.board(canvas, G.engine, {
@@ -701,6 +826,8 @@ var Game = (function () {
         if (boxEl) {
           boxEl.classList.toggle('dead', view.alive === false);
           boxEl.classList.toggle('disconnected', view.connected === false);
+          boxEl.classList.toggle('targeted',
+            Object.keys(G.opponents).length > 1 && id === G.lastTargetId && view.alive !== false);
         }
         var stEl = U.$('#op-stats-' + cssId(id));
         if (stEl && view.stats) {
@@ -711,11 +838,33 @@ var Game = (function () {
     }
   }
 
+  /** Spectator view: every player's board, nothing of our own. */
+  function drawSpectated() {
+    Object.keys(G.opponents).forEach(function (id) {
+      var view = G.opponents[id];
+      var canvasEl = U.$('#op-canvas-' + cssId(id));
+      if (canvasEl) Render.mini(canvasEl, view.board, view.piece);
+      var boxEl = U.$('#op-' + cssId(id));
+      if (boxEl) {
+        boxEl.classList.toggle('dead', view.alive === false);
+        boxEl.classList.toggle('disconnected', view.connected === false);
+      }
+      var stEl = U.$('#op-stats-' + cssId(id));
+      if (stEl && view.stats) {
+        stEl.innerHTML = '<span>' + U.fmtNum(view.stats.apm, 1) + ' APM</span>' +
+                         '<span>' + (view.ko ? view.ko + ' KO' : '') + '</span>' +
+                         '<span>' + U.fmtNum(view.stats.pps, 2) + ' PPS</span>';
+      }
+    });
+  }
+
   function cssId(id) { return String(id).replace(/[^A-Za-z0-9_-]/g, ''); }
 
   function renderOpponentShells(players) {
     var host = U.$('#opponents');
     U.clear(host);
+    // Watching means these are the only boards on screen, so draw them big.
+    var wide = G.spectating ? 180 : 110;
     players.forEach(function (p) {
       var id = cssId(p.id);
       var badge = U.el('div', { class: 'rank-badge xs' });
@@ -724,8 +873,11 @@ var Game = (function () {
         badge,
         U.el('div', { class: 'opponent-name', text: p.name })
       ]);
-      var canvas = U.el('canvas', { id: 'op-canvas-' + id, width: 110, height: 220 });
-      var stats = U.el('div', { class: 'opponent-stats', id: 'op-stats-' + id, html: '<span>0.0 APM</span><span>0.00 PPS</span>' });
+      var canvas = U.el('canvas', { id: 'op-canvas-' + id, width: wide, height: wide * 2 });
+      var stats = U.el('div', {
+        class: 'opponent-stats', id: 'op-stats-' + id,
+        html: '<span>0.0 APM</span><span></span><span>0.00 PPS</span>'
+      });
       host.appendChild(U.el('div', { class: 'opponent', id: 'op-' + id }, [head, canvas, stats]));
     });
   }
@@ -738,6 +890,8 @@ var Game = (function () {
     strip.style.display = versus ? 'flex' : 'none';
     U.$('#opponents').style.display = versus ? 'flex' : 'none';
     U.$('.garbage-meter').style.display = versus ? 'flex' : 'none';
+    U.$('.stage').classList.toggle('spectating', !!G.spectating);
+    U.$('#spectate-tag').style.display = G.spectating ? 'block' : 'none';
 
     var extraKey = U.$('#s-extra-k');
     if (G.mode === 'blitz') extraKey.textContent = 'Score';
@@ -898,6 +1052,14 @@ var Game = (function () {
 
   function showVersusResult(room) {
     pause();
+    if (G.spectating) {
+      // Watching: no rating change and no stats of our own to report.
+      var winner = null;
+      room.players.forEach(function (p) { if (p.id === room.matchWinner) winner = p; });
+      banner(winner ? winner.name + ' WINS' : 'MATCH OVER',
+             room.players.map(function (p) { return p.name + ' ' + p.wins; }).join('   '));
+      return;
+    }
     foldRoundStats();
     var myId = Net.creds().id;
     var won = room.matchWinner === myId;
@@ -951,6 +1113,7 @@ var Game = (function () {
 
   /* -------------------------------------------------------------- misc */
 
+  function isSpectating() { return !!G.spectating; }
   function setReady(v) { G.ready = !!v; }
   function isReady() { return !!G.ready; }
   function state() { return G; }
@@ -963,6 +1126,9 @@ var Game = (function () {
     leave: leave,
     setReady: setReady,
     isReady: isReady,
+    isSpectating: isSpectating,
+    /** Who the next attack would land on. Drives the HUD highlight. */
+    pickTarget: pickTarget,
     state: state,
     updateScoreStrip: updateScoreStrip,
     result: function () { return G.result; }

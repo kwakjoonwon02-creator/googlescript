@@ -262,16 +262,154 @@ async function driveMatch(loser, winner, timeoutMs) {
     assert(/배치 경기 1\/10/.test(aText), 'placement line missing: ' + aText.slice(-200));
   });
 
+  section('spectating and chat');
+
+  const C = await (await browser.newContext({ viewport: { width: 1280, height: 800 } })).newPage();
+  C.on('pageerror', e => errs.push('P2: ' + e.message));
+  await C.goto(url);
+
+  let watchCode = null;
+
+  await t('a third client joins a live room as a spectator', async () => {
+    await setName(C, 'Watcher');
+
+    // Fresh casual room: A hosts, B plays, C watches.
+    for (const page of [A, B]) {
+      if (await page.isVisible('#screen-result.active')) {
+        await page.click('#btn-result-menu');
+      }
+      await page.waitForSelector('#screen-menu.active', { timeout: 15000 });
+    }
+    await A.click('[data-nav="multi"]');
+    await A.waitForSelector('#screen-multi.active');
+    await A.click('#btn-create-room');
+    await A.waitForSelector('#screen-room.active', { timeout: 10000 });
+    watchCode = (await A.textContent('#room-code-big')).trim();
+
+    await B.click('[data-nav="multi"]');
+    await B.waitForSelector('#screen-multi.active');
+    await B.fill('#join-code', watchCode);
+    await B.click('#btn-join-code');
+    await B.waitForSelector('#screen-room.active', { timeout: 10000 });
+
+    await C.click('[data-nav="multi"]');
+    await C.waitForSelector('#screen-multi.active');
+    await C.fill('#join-code', watchCode);
+    await C.click('#btn-spectate-code');
+    await C.waitForSelector('#screen-room.active', { timeout: 10000 });
+    assert(await C.evaluate(() => Game.isSpectating()), 'C should be spectating');
+    assert(!(await C.isVisible('#btn-ready')), 'a spectator must not get a ready button');
+  });
+
+  await t('players see the spectator on the bench', async () => {
+    await A.waitForFunction(() => /Watcher/.test(document.querySelector('#room-spectators').textContent),
+      null, { timeout: 15000 });
+    eq(await A.textContent('#room-spectator-count'), '(1)', 'spectator count');
+    eq(await A.evaluate(() => Game.state().room.players.length), 2, 'still two players');
+  });
+
+  await t('chat reaches everyone in the room, players and spectators alike', async () => {
+    await A.fill('#chat-input', 'gl hf');
+    await A.click('#btn-chat-send');
+    await C.waitForFunction(
+      () => /gl hf/.test(document.querySelector('#chat-log').textContent), null, { timeout: 15000 });
+    await B.waitForFunction(
+      () => /gl hf/.test(document.querySelector('#chat-log').textContent), null, { timeout: 15000 });
+
+    await C.fill('#chat-input', '구경 잘할게요');
+    await C.click('#btn-chat-send');
+    await A.waitForFunction(
+      () => /구경 잘할게요/.test(document.querySelector('#chat-log').textContent), null, { timeout: 15000 });
+    const marked = await A.evaluate(() =>
+      Array.from(document.querySelectorAll('#chat-log .chat-msg'))
+        .some(n => n.classList.contains('spectator') && /구경/.test(n.textContent)));
+    assert(marked, 'spectator messages should be marked as such');
+  });
+
+  await t('a spectator does not hold up the start', async () => {
+    await A.click('#btn-ready');
+    await B.click('#btn-ready');
+    await A.waitForFunction(() => Game.state().phase === 'playing', null, { timeout: 30000 });
+    await B.waitForFunction(() => Game.state().phase === 'playing', null, { timeout: 30000 });
+  });
+
+  await t('the spectator watches both boards and none of its own', async () => {
+    await C.waitForSelector('#screen-game.active', { timeout: 20000 });
+    await C.waitForFunction(() => Object.keys(Game.state().opponents).length === 2,
+      null, { timeout: 20000 });
+    assert(await C.isVisible('#spectate-tag'), 'spectating badge should show');
+    assert(!(await C.isVisible('#board')), 'a spectator has no board of its own');
+    assert(!(await C.isVisible('#hold-canvas')), 'no hold box either');
+
+    // Put pieces down so the watched boards actually have something on them.
+    const place = () => { const e = Game.state().engine; for (let i = 0; i < 4; i++) if (e.alive) e.hardDrop(); };
+    await A.evaluate(place);
+    await B.evaluate(place);
+
+    await C.waitForFunction(() => {
+      const boards = Object.keys(Game.state().opponents)
+        .map(id => Game.state().opponents[id].board);
+      return boards.length === 2 && boards.every(b => b && /[1-8]/.test(b));
+    }, null, { timeout: 20000 });
+
+    const painted = await C.evaluate(() =>
+      Array.from(document.querySelectorAll('.opponent canvas')).map(c => {
+        const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++;
+        return n;
+      }));
+    eq(painted.length, 2, 'two boards drawn');
+    assert(painted.every(n => n > 2000), 'boards look blank: ' + painted.join(','));
+  });
+
+  await t('a spectator pressing keys changes nothing', async () => {
+    const before = await C.evaluate(() => ({
+      pieces: Game.state().engine ? Game.state().engine.stats.pieces : -1,
+      log: Game.state().myAttackLog.length
+    }));
+    for (const key of ['Space', 'ArrowLeft', 'ArrowUp', 'KeyC', 'KeyR']) {
+      await C.keyboard.press(key);
+    }
+    await C.waitForTimeout(400);
+    const after = await C.evaluate(() => ({
+      pieces: Game.state().engine ? Game.state().engine.stats.pieces : -1,
+      log: Game.state().myAttackLog.length,
+      screen: document.querySelector('.screen.active').id
+    }));
+    eq(after.pieces, before.pieces, 'a spectator must not place pieces');
+    eq(after.log, before.log, 'and must not generate attacks');
+    eq(after.screen, 'screen-game', 'and must not be thrown off the screen');
+  });
+
+  await t('the spectator is told who won', async () => {
+    await A.evaluate(() => Game.state().engine.topOut());
+    await C.waitForFunction(() => {
+      const t = document.querySelector('#board-overlay').textContent || '';
+      return /WIN|ROUND/.test(t);
+    }, null, { timeout: 25000 });
+  });
+
+  await t('leaving frees the bench slot', async () => {
+    await C.keyboard.press('Escape');
+    await C.waitForSelector('#screen-room.active', { timeout: 10000 });
+    await C.click('#btn-leave-room');
+    await C.waitForSelector('#screen-multi.active', { timeout: 10000 });
+    await A.waitForFunction(() => (Game.state().room.spectators || []).length === 0,
+      null, { timeout: 20000 });
+  });
+
   await t('no uncaught errors on either client', async () => {
     const a = await A.evaluate(() => window.__errors);
     const b = await B.evaluate(() => window.__errors);
-    assert(a.length === 0 && b.length === 0 && errs.length === 0,
-      'A=' + JSON.stringify(a) + ' B=' + JSON.stringify(b) + ' page=' + JSON.stringify(errs));
+    const c = await C.evaluate(() => window.__errors);
+    assert(a.length === 0 && b.length === 0 && c.length === 0 && errs.length === 0,
+      'A=' + JSON.stringify(a) + ' B=' + JSON.stringify(b) +
+      ' C=' + JSON.stringify(c) + ' page=' + JSON.stringify(errs));
   });
 
   await t('no RPC failed on either client', async () => {
     const bad = [];
-    for (const p of [A, B]) {
+    for (const p of [A, B, C]) {
       const log = await p.evaluate(() => window.__rpcLog);
       log.filter(r => !r.ok).forEach(r => bad.push(r));
     }
