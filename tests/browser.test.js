@@ -499,6 +499,79 @@ const { testAsync: t, assert, eq, section, note, finish } = require('./lib/repor
     await page.waitForSelector('#screen-menu.active', { timeout: 5000 });
   });
 
+  section('typography');
+
+  await t('nothing that holds Hangul is letterspaced apart', async () => {
+    // Wide tracking is what makes small uppercase Latin labels look
+    // designed. Applied to Hangul it inserts a gap between every syllable,
+    // so 계정으로 renders as 계 정 으 로. The rule is in the stylesheet
+    // header; this is what stops it drifting back.
+    const offenders = await page.evaluate(() => {
+      const HANGUL = /[\uAC00-\uD7A3]/;
+      const bad = [];
+      const screens = ['auth', 'menu', 'solo', 'multi', 'room', 'queue',
+                       'leaderboard', 'config', 'result'];
+      for (const name of screens) {
+        const screen = document.querySelector('#screen-' + name);
+        if (!screen) continue;
+        screen.classList.add('active');
+        for (const el of screen.querySelectorAll('*')) {
+          const own = Array.from(el.childNodes)
+            .filter(n => n.nodeType === 3).map(n => n.textContent).join('');
+          if (!HANGUL.test(own)) continue;
+          const cs = getComputedStyle(el);
+          const track = cs.letterSpacing === 'normal' ? 0 : parseFloat(cs.letterSpacing);
+          const size = parseFloat(cs.fontSize) || 16;
+          if (track / size > 0.06) {
+            bad.push(name + ' ' + (el.id || el.className || el.tagName) +
+                     ' @ ' + (track / size).toFixed(3) + 'em — "' + own.trim().slice(0, 18) + '"');
+          }
+        }
+        screen.classList.remove('active');
+      }
+      document.querySelector('#screen-menu').classList.add('active');
+      return bad;
+    });
+    assert(offenders.length === 0, offenders.join(' | '));
+  });
+
+  await t('hidden means hidden, whatever the class wants to display', async () => {
+    // .field is display:flex, which beats the [hidden] attribute's own
+    // display:none unless something says otherwise — so the confirm-password
+    // field used to sit there in plain sight while signing in.
+    const shown = await page.evaluate(() => {
+      document.querySelector('#screen-menu').classList.remove('active');
+      document.querySelector('#screen-auth').classList.add('active');
+      const probe = document.querySelector('#auth-pw2-field');
+      probe.hidden = true;
+      const visible = probe.getClientRects().length > 0;
+      document.querySelector('#screen-auth').classList.remove('active');
+      document.querySelector('#screen-menu').classList.add('active');
+      return visible;
+    });
+    eq(shown, false, 'a [hidden] element was still laid out');
+  });
+
+  await t('no decorative layer can swallow a click', async () => {
+    // A pseudo-element that paints outside its owner will also take the
+    // clicks meant for whatever is next to it, which is how the hover fill
+    // once stole presses from the button beside it.
+    const solid = await page.evaluate(() => {
+      const bad = [];
+      for (const el of document.querySelectorAll('.screen *, .modal *, .toast-host *')) {
+        for (const which of ['::before', '::after']) {
+          const cs = getComputedStyle(el, which);
+          if (cs.content === 'none') continue;
+          if (cs.pointerEvents !== 'none' && cs.position === 'absolute') {
+            bad.push((el.id || el.className || el.tagName) + which);
+          }
+        }
+      }
+      return bad;
+    });
+    assert(solid.length === 0, 'clickable decoration: ' + solid.join(', '));
+  });
+
   section('screen transition comfort');
 
   await t('nothing large and bright sweeps the screen on navigation', async () => {

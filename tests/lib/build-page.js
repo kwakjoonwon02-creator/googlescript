@@ -195,7 +195,7 @@ function buildPage(mode) {
     '<title>TETRA.GS test</title>',
     read('css.html'),
     '</head><body>',
-    '<div id="bg-layer"><div class="bg-grid"></div><div class="bg-glow"></div><div class="bg-stripes"></div></div>',
+    '<div id="bg-layer"><div class="bg-grid"></div><div class="bg-glow"></div><div class="bg-vignette"></div></div>',
     read('ui.html'),
     ERROR_TRAP
   ];

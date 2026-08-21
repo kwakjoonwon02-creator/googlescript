@@ -119,7 +119,7 @@ var App = (function () {
     var host = U.$('#recent-matches');
     U.clear(host);
     if (!history || !history.length) {
-      host.appendChild(U.el('p', { class: 'hint', text: '아직 기록이 없습니다.' }));
+      host.appendChild(U.el('div', { class: 'empty', text: '아직 기록이 없습니다' }));
       return;
     }
     history.forEach(function (m) {
@@ -653,6 +653,15 @@ var App = (function () {
       ]));
     });
 
+    // Empty seats are drawn rather than left blank: "1/2" in a heading is a
+    // fact, an outlined seat is the room telling you it is waiting.
+    for (var free = room.players.length; free < room.config.maxPlayers; free++) {
+      host.appendChild(U.el('div', {
+        class: 'seat-open',
+        text: '자리 비어 있음'
+      }));
+    }
+
     var bench = room.spectators || [];
     U.$('#room-spectator-count').textContent = '(' + bench.length + ')';
     var benchHost = U.$('#room-spectators');
@@ -783,7 +792,7 @@ var App = (function () {
     var pinned = log.scrollTop + log.clientHeight >= log.scrollHeight - 24;
     U.clear(log);
     if (!chatHistory.length) {
-      log.appendChild(U.el('p', { class: 'hint', text: '아직 대화가 없습니다.' }));
+      log.appendChild(U.el('div', { class: 'empty', text: '아직 대화가 없습니다' }));
       return;
     }
     var myId = Net.creds() && Net.creds().id;
@@ -852,7 +861,10 @@ var App = (function () {
 
     if (lbTab === 'ranked') {
       if (!lbData.ranked.length) {
-        host.appendChild(U.el('p', { class: 'hint', text: '아직 랭크가 부여된 플레이어가 없습니다. 랭크 10경기를 완료해 보세요.' }));
+        host.appendChild(U.el('div', {
+          class: 'empty',
+          text: '아직 랭크가 부여된 플레이어가 없습니다 — 경쟁 10경기를 마치면 여기에 오릅니다'
+        }));
         return;
       }
       var rows = lbData.ranked.map(function (r) {
@@ -875,7 +887,7 @@ var App = (function () {
 
     var list = lbTab === 'sprint' ? lbData.sprint : lbData.blitz;
     if (!list.length) {
-      host.appendChild(U.el('p', { class: 'hint', text: '아직 기록이 없습니다.' }));
+      host.appendChild(U.el('div', { class: 'empty', text: '아직 기록이 없습니다' }));
       return;
     }
     var body = list.map(function (r) {

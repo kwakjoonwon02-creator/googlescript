@@ -2,31 +2,41 @@
 /* ============================================================== TETRA.GS ==
    Design language: an arcade cabinet, not a dashboard.
 
-   Three rules hold it together.
-   1. SKEW. Every interactive surface is sheared -9deg with its content
-      sheared back. Nothing else in the UI is diagonal, so the shape alone
-      says "this is a control".
+   Four rules hold it together.
+   1. SKEW. Every interactive surface is sheared, with its content sheared
+      back. Nothing else in the UI is diagonal, so the shape alone says
+      "this is a control". The angle is shallow (-6deg): enough to read as
+      deliberate, not so much that the interface looks like it is falling
+      over.
    2. ONE ACCENT AT A TIME. Each screen sets --accent, and buttons, bars,
       focus rings and highlights all read from it. Navigating shifts the
-      whole room's colour instead of scattering hues around.
-   3. FLAT ON BLACK. Depth comes from contrast and motion. No drop shadow
-      does structural work, and there is no gradient wash behind anything.
+      whole room's colour instead of scattering hues around. Accent is for
+      the one thing you are meant to press, never for decoration.
+   3. FLAT ON BLACK. Depth is a hairline and a top-edge highlight, not a
+      pile of drop shadows. Shadow only separates things that float.
+   4. TRACKING IS FOR LATIN. Wide letter-spacing is what makes small
+      uppercase labels look designed — and what makes Hangul look broken,
+      because it inserts a gap between every syllable. It is allowed only
+      on strings that cannot contain Korean: units, stat keys, the
+      wordmark. Everything bilingual sets its own tracking to almost none
+      and breaks lines on word boundaries.
    ========================================================================= */
 
 :root {
   /* surfaces ------------------------------------------------------------ */
-  --bg:          #08080c;
-  --bg-2:        #0d0d13;
-  --surface:     #15151d;
-  --surface-2:   #1d1d28;
-  --surface-3:   #262634;
-  --line:        rgba(255, 255, 255, 0.06);
-  --line-2:      rgba(255, 255, 255, 0.13);
+  --bg:          #07070a;
+  --bg-2:        #0b0b10;
+  --surface:     #121218;
+  --surface-2:   #1a1a22;
+  --surface-3:   #23232d;
+  --line:        rgba(255, 255, 255, 0.055);
+  --line-2:      rgba(255, 255, 255, 0.115);
+  --edge:        rgba(255, 255, 255, 0.045);   /* top-edge highlight */
 
   /* ink ----------------------------------------------------------------- */
-  --text:        #f4f4f8;
-  --dim:         #9d9db2;
-  --faint:       #5d5d73;
+  --text:        #eef0f6;
+  --dim:         #9598a8;
+  --faint:       #5b5e6f;
 
   /* accents ------------------------------------------------------------- */
   --accent:      #ff6a1a;
@@ -49,14 +59,19 @@
   --piece-g: #4a4a5c;
 
   /* type ---------------------------------------------------------------- */
-  --kr: 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR';
+  /* Latin first, Korean behind it: the browser falls through per glyph, so
+     Latin gets the condensed face and Hangul gets one that actually has the
+     glyphs instead of a random system default. */
+  --kr: 'Noto Sans KR', 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic';
   --font-ui: 'Barlow Semi Condensed', var(--kr), -apple-system, BlinkMacSystemFont, sans-serif;
   --font-display: 'Barlow Condensed', var(--kr), -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'D2Coding', ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* The only tracking wide enough to be a style. Reserved for Latin. */
+  --track: 0.18em;
 
   /* geometry ------------------------------------------------------------ */
-  --skew: -9deg;
-  --unskew: 9deg;
+  --skew: -6deg;
+  --unskew: 6deg;
 
   /* motion -------------------------------------------------------------- */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -73,11 +88,20 @@ html, body {
   color: var(--text);
   font-family: var(--font-ui);
   font-size: 16px;
+  line-height: 1.5;
   overflow: hidden;
   user-select: none;
+  /* Korean has no spaces inside a word but plenty between phrases; without
+     this the browser breaks mid-word and the copy reads as damaged. */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
+
+/* An element that is hidden is hidden, whatever display its class wants. */
+[hidden] { display: none !important; }
+
 
 ::selection { background: var(--accent); color: var(--accent-ink); }
 
@@ -85,39 +109,49 @@ html, body {
 
 #bg-layer { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
 
-/* A drifting field of tetromino outlines: on-theme wallpaper rather than
-   the usual perspective grid. */
+/* The wallpaper used to be a field of large tetromino outlines scattered at
+   angles, drifting. Scattered ornament reads as filler; a ruled field reads
+   as a surface something was built on. This is the playfield grid at the
+   size of one cell, so far down in contrast that you register it as texture
+   rather than see it — the same measure the board is drawn to. */
 .bg-grid {
-  position: absolute; inset: -20%;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cg fill='none' stroke='%23ffffff' stroke-opacity='0.05' stroke-width='2'%3E%3Cpath d='M10 10h60v20H10z'/%3E%3Cpath d='M110 20h20v60h-20z'/%3E%3Cpath d='M30 90h40v20H30zm20-20h20v20H50z'/%3E%3Cpath d='M120 110h40v20h-40zm0 20h20v20h-20z'/%3E%3Cpath d='M80 150h40v20H80z'/%3E%3C/g%3E%3C/svg%3E");
-  background-size: 520px 520px;
-  opacity: 0.5;
-}
-
-/* A single slow diagonal light, the only soft thing on the page. */
-.bg-glow {
-  position: absolute; top: -40%; left: -20%; width: 140%; height: 180%;
-  background: linear-gradient(115deg,
-    transparent 30%,
-    color-mix(in srgb, var(--accent) 7%, transparent) 45%,
-    transparent 60%);
-  opacity: 0.85;
-}
-
-.bg-stripes {
   position: absolute; inset: 0;
-  background: radial-gradient(120% 90% at 50% 0%, transparent 40%, rgba(0,0,0,0.75) 100%);
+  background-image:
+    linear-gradient(90deg, rgba(255,255,255,0.028) 1px, transparent 1px),
+    linear-gradient(0deg,  rgba(255,255,255,0.028) 1px, transparent 1px);
+  background-size: 32px 32px;
+  /* Fades out downward so the grid never competes with content near the
+     bottom of the screen. */
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgba(0,0,0,0.35) 55%, transparent 92%);
+  mask-image: linear-gradient(180deg, #000 0%, rgba(0,0,0,0.35) 55%, transparent 92%);
+}
+
+/* One soft light, off to one side, in the screen's own accent. It is the
+   only gradient on the page and the only thing that moves out here. */
+.bg-glow {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(52% 42% at 14% -4%,
+      color-mix(in srgb, var(--accent) 9%, transparent), transparent 70%),
+    radial-gradient(44% 38% at 98% 92%,
+      color-mix(in srgb, var(--accent) 5%, transparent), transparent 72%);
+  transition: background 0.6s linear;
+}
+
+.bg-vignette {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(130% 100% at 50% -10%, transparent 42%, rgba(0,0,0,0.72) 100%);
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .bg-grid { animation: drift 90s linear infinite; }
-  .bg-glow { animation: sweep-light 14s ease-in-out infinite alternate; }
+  .bg-glow { animation: breathe 18s ease-in-out infinite alternate; }
 }
-@keyframes drift { to { background-position: 520px 520px; } }
-@keyframes sweep-light { from { transform: translateX(-8%); } to { transform: translateX(8%); } }
+@keyframes breathe { from { opacity: 0.75; } to { opacity: 1; } }
 
-body.in-game .bg-grid { opacity: 0.35; }
-body.in-game .bg-glow { opacity: 0.4; }
+/* Nothing decorative competes with a live board. */
+body.in-game .bg-grid { opacity: 0.4; }
+body.in-game .bg-glow { opacity: 0.35; animation: none; }
 
 /* -------------------------------------------------------------- structure */
 
@@ -145,73 +179,88 @@ body.in-game .bg-glow { opacity: 0.4; }
 .auth-shell {
   margin: auto;
   display: grid;
-  grid-template-columns: minmax(0, 1.05fr) 400px;
-  gap: 72px;
+  grid-template-columns: minmax(0, 1fr) 384px;
+  gap: 80px;
   align-items: center;
   width: 100%;
-  max-width: 1000px;
+  max-width: 980px;
 }
 
-.auth-brand .subtitle { margin-top: 12px; }
+.auth-brand .subtitle { margin-top: 14px; max-width: 34ch; }
 
 .auth-points {
   list-style: none;
-  margin: 34px 0 0;
+  margin: 32px 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  max-width: 420px;
+  max-width: 400px;
 }
 .auth-points li {
   position: relative;
-  padding: 13px 0 13px 20px;
+  padding: 14px 0 14px 22px;
   font-size: 14px;
   color: var(--dim);
   box-shadow: inset 0 -1px 0 var(--line);
 }
+.auth-points li:last-child { box-shadow: none; }
 .auth-points li::before {
   content: '';
   position: absolute;
   left: 0; top: 50%;
-  width: 6px; height: 6px;
-  margin-top: -3px;
+  width: 5px; height: 5px;
+  margin-top: -2px;
   background: var(--accent);
   transform: skewX(var(--skew));
+  pointer-events: none;
 }
 .auth-points b {
   color: var(--text);
   font-weight: 700;
-  margin-right: 8px;
-  letter-spacing: 0.04em;
+  margin-right: 9px;
 }
 
+/* The one thing on the page that floats, so it is the one thing with a
+   shadow. The accent is a single hairline along the top edge rather than a
+   band: the card should look lit, not highlighted. */
 .auth-card {
   position: relative;
   background: var(--surface);
-  padding: 30px 30px 26px;
-  box-shadow: inset 0 0 0 1px var(--line-2), 0 40px 90px -50px #000;
+  padding: 28px 30px 26px;
+  box-shadow:
+    inset 0 1px 0 var(--edge),
+    inset 0 0 0 1px var(--line-2),
+    0 50px 100px -60px #000;
 }
 .auth-card::before {
   content: '';
   position: absolute;
   left: 0; right: 0; top: 0;
-  height: 3px;
-  background: var(--accent);
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 15%, transparent));
   pointer-events: none;
 }
 
-.auth-form { display: flex; flex-direction: column; gap: 15px; }
-.auth-form .btn { margin-top: 5px; }
+.auth-form { display: flex; flex-direction: column; gap: 16px; }
+.auth-form .btn { margin-top: 4px; }
 
+/* Collapsed to nothing rather than hidden, so appearing does not shove the
+   button out from under the cursor. */
 .auth-error {
+  position: relative;
   margin: 0;
-  font-size: 13px;
+  padding-left: 13px;
+  font-size: 13px; line-height: 1.5;
   color: var(--bad);
   max-height: 0;
   opacity: 0;
   overflow: hidden;
-  transition: max-height var(--fast) linear, opacity var(--fast) linear;
+  transition: max-height var(--med) var(--ease-out), opacity var(--fast) linear;
+}
+.auth-error::before {
+  content: ''; position: absolute; left: 0; top: 3px; bottom: 3px;
+  width: 2px; background: var(--bad); transform: skewX(var(--skew));
+  pointer-events: none;
 }
 .auth-error.show { max-height: 60px; opacity: 1; }
 
@@ -219,11 +268,10 @@ body.in-game .bg-glow { opacity: 0.4; }
   display: flex;
   align-items: center;
   gap: 14px;
-  margin: 22px 0 14px;
+  margin: 24px 0 14px;
   color: var(--faint);
-  font-size: 11px;
-  letter-spacing: 0.24em;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.02em;
 }
 .auth-divider::before, .auth-divider::after {
   content: '';
@@ -291,32 +339,48 @@ body.in-game .bg-glow { opacity: 0.4; }
 
 .title-xl {
   font-family: var(--font-display);
-  font-size: clamp(52px, 6.4vw, 88px);
-  font-weight: 800; line-height: 0.86;
-  letter-spacing: -0.02em; text-transform: uppercase;
+  font-size: clamp(46px, 5vw, 68px);
+  font-weight: 800; line-height: 0.88;
+  letter-spacing: -0.025em; text-transform: uppercase;
   margin: 0;
 }
 .title-xl .dot { color: var(--accent); }
 
+/* A line of Latin above a title. It does the job the oversized wordmark was
+   doing — telling you where you are — without taking a third of the screen
+   to do it. */
+.kicker {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 10px; font-weight: 700;
+  letter-spacing: var(--track); text-transform: uppercase;
+  color: var(--faint); margin: 0 0 14px;
+}
+.kicker::before {
+  content: ''; width: 18px; height: 2px; background: var(--accent);
+  transform: skewX(var(--skew)); flex-shrink: 0;
+}
+
 .title-lg {
   font-family: var(--font-display);
-  font-size: 36px; font-weight: 800; line-height: 1;
-  letter-spacing: 0.01em; text-transform: uppercase;
+  font-size: 32px; font-weight: 800; line-height: 1;
+  letter-spacing: 0.005em; text-transform: uppercase;
   margin: 0;
-  position: relative; padding-left: 16px;
+  position: relative; padding-left: 15px;
 }
 /* Every page title carries the accent as a slab on its left edge. */
 .title-lg::before {
-  content: ''; position: absolute; left: 0; top: 6%; bottom: 6%;
-  width: 6px; background: var(--accent);
+  content: ''; position: absolute; left: 0; top: 10%; bottom: 10%;
+  width: 4px; background: var(--accent);
   transform: skewX(var(--skew));
 }
 
+/* Bilingual: almost no tracking, and not uppercased — neither does anything
+   for Hangul and both hurt it. */
 .subtitle {
-  color: var(--dim); font-size: 13px; font-weight: 600;
-  letter-spacing: 0.26em; text-transform: uppercase; margin: 0;
+  color: var(--dim); font-size: 14px; font-weight: 500;
+  letter-spacing: 0.01em; margin: 0;
 }
-.hint { color: var(--faint); font-size: 13px; line-height: 1.55; }
+.hint { color: var(--faint); font-size: 13px; line-height: 1.6; letter-spacing: 0; }
 
 /* ---------------------------------------------------------------- header */
 
@@ -341,10 +405,12 @@ body.in-game .bg-glow { opacity: 0.4; }
 }
 .identity:hover { transform: translateX(5px); }
 .identity:hover::before { background: var(--surface-2); }
-.identity-name { font-weight: 700; font-size: 21px; letter-spacing: 0.01em; line-height: 1.1; }
+.identity-name { font-weight: 700; font-size: 20px; letter-spacing: 0.005em; line-height: 1.15; }
+/* Latin by construction: a TR figure and a win-loss record. */
 .identity-sub {
   font-size: 11px; color: var(--dim); font-weight: 600;
-  letter-spacing: 0.16em; text-transform: uppercase;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ----------------------------------------------------------- rank badges */
@@ -353,16 +419,17 @@ body.in-game .bg-glow { opacity: 0.4; }
    skew language is reserved for things you can click. */
 .rank-badge {
   position: relative;
-  width: 48px; height: 48px; flex-shrink: 0;
+  width: 46px; height: 46px; flex-shrink: 0;
   display: grid; place-items: center;
   font-family: var(--font-display);
-  font-weight: 800; font-size: 22px;
+  font-weight: 800; font-size: 21px;
   background: var(--surface-3); color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.12);
   overflow: hidden;
 }
 .rank-badge::after {
   content: ''; position: absolute; top: -20%; bottom: -20%; width: 40%;
-  background: linear-gradient(100deg, transparent, rgba(255,255,255,0.45), transparent);
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,0.28), transparent);
   transform: translateX(-280%) skewX(-16deg);
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -383,13 +450,14 @@ body.in-game .bg-glow { opacity: 0.4; }
 .btn {
   position: relative; isolation: isolate;
   font-family: var(--font-ui);
-  font-size: 14px; font-weight: 700; letter-spacing: 0.14em;
+  font-size: 14px; font-weight: 700; letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text);
   background: transparent;
   border: none;
   padding: 12px 26px;
   cursor: pointer;
+  white-space: nowrap;
   transition: color var(--fast) linear, transform var(--fast) var(--ease-out);
 }
 /* Hover wipes in from the left. One pseudo-element does both states via a
@@ -401,8 +469,12 @@ body.in-game .bg-glow { opacity: 0.4; }
   transform: skewX(var(--skew));
   background-image: linear-gradient(90deg,
     var(--btn-fill, var(--accent)) 0 50%, var(--btn-base, var(--surface-2)) 50% 100%);
-  background-size: 200% 100%;
+  /* Slightly wider than two halves so the seam between them sits just past
+     the edge at rest; at exactly 200% it samples as a coloured hairline
+     down the side of every ghost button. */
+  background-size: 204% 100%;
   background-position: 100% 0;
+  background-repeat: no-repeat;
   transition: background-position var(--med) var(--ease-out), box-shadow var(--fast) linear;
 }
 .btn:hover:not(:disabled)::before { background-position: 0 0; }
@@ -417,81 +489,168 @@ body.in-game .bg-glow { opacity: 0.4; }
 .btn.ghost { --btn-base: transparent; }
 .btn.ghost::before { box-shadow: inset 0 0 0 1px var(--line-2); }
 
-.btn.sm { font-size: 11px; padding: 8px 18px; letter-spacing: 0.12em; }
+.btn.sm { font-size: 11px; padding: 8px 17px; letter-spacing: 0.03em; }
+/* A settings toggle is a state, not a call to action: it takes the accent
+   as a tint rather than a fill, so a column of them does not shout. */
+.btn[data-toggle].primary { --btn-base: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); }
+.btn[data-toggle].primary::before { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+.btn[data-toggle].primary:hover:not(:disabled) { color: var(--accent-ink); }
+.btn.lg { font-size: 15px; padding: 15px 30px; }
 .btn.wide { width: 100%; }
 
 /* ----------------------------------------------------------- menu blocks */
 
-.menu-list { display: flex; flex-direction: column; gap: 8px; max-width: 660px; }
+/* The two columns are held together as one block and centred, rather than
+   pushed to opposite edges. Spread across the full width they left a
+   screen-wide hole down the middle of the menu. */
+.menu-columns {
+  gap: 40px;
+  width: 100%; max-width: 1150px;
+  margin: 0 auto;
+  align-items: stretch;
+}
+.menu-column {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; justify-content: center;
+}
+/* The header sits on the same measure as the content under it. */
+#screen-menu .topbar { width: 100%; max-width: 1150px; margin-left: auto; margin-right: auto; }
 
+/* Both columns read as one centred block, so the side column stops short of
+   the floor instead of stretching a mostly-empty panel to it. */
+#screen-menu .side-column { justify-content: center; }
+#screen-menu .side-column .panel.grow { flex: 0 1 auto; min-height: 230px; max-height: 46vh; }
+
+.menu-list { display: flex; flex-direction: column; gap: 5px; }
+
+/* The row is a slab of surface with a coloured edge. The colour used to be
+   a six-pixel bar and a wash across a fifth of the row, which is a lot of
+   paint for a list; it is a hairline that thickens under the cursor now,
+   and the wash only appears on hover. */
 .menu-item {
   position: relative;
-  display: flex; align-items: center; gap: 20px;
-  padding: 18px 28px;
+  display: flex; align-items: center; gap: 18px;
+  padding: 16px 26px;
   background: var(--surface);
   cursor: pointer;
   overflow: hidden;
   transform: skewX(var(--skew));
+  box-shadow: inset 0 1px 0 var(--edge);
   transition: transform var(--med) var(--ease-out), background var(--fast) linear;
 }
 .menu-item > * { transform: skewX(var(--unskew)); }
 .menu-item::before {
   content: ''; position: absolute; left: 0; top: 0; bottom: 0;
-  width: 6px; background: var(--item-color, var(--accent));
+  width: 3px; background: var(--item-color, var(--accent));
   transition: width var(--med) var(--ease-out);
+  pointer-events: none;
 }
 .menu-item::after {
   content: ''; position: absolute; inset: 0;
   background: linear-gradient(90deg,
-    color-mix(in srgb, var(--item-color, var(--accent)) 22%, transparent), transparent 55%);
+    color-mix(in srgb, var(--item-color, var(--accent)) 14%, transparent), transparent 42%);
   opacity: 0; transition: opacity var(--med) linear;
+  pointer-events: none;
 }
-.menu-item:hover { transform: skewX(var(--skew)) translateX(20px); background: var(--surface-2); }
-.menu-item:hover::before { width: 12px; }
+.menu-item:hover { transform: skewX(var(--skew)) translateX(10px); background: var(--surface-2); }
+.menu-item:hover::before { width: 7px; }
 .menu-item:hover::after { opacity: 1; }
-.menu-item:active { transform: skewX(var(--skew)) translateX(20px) scale(0.99); }
+.menu-item:active { transform: skewX(var(--skew)) translateX(10px) scale(0.995); }
 .menu-item.disabled { opacity: 0.35; pointer-events: none; }
+.menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
+/* A filled tile rather than an outlined box: it reads as a key cap, and it
+   carries the row's colour without a second stroke on the screen. */
 .menu-icon {
-  width: 44px; height: 44px; flex-shrink: 0;
+  width: 40px; height: 40px; flex-shrink: 0;
   display: grid; place-items: center;
   font-family: var(--font-display);
-  font-size: 22px; font-weight: 800;
+  font-size: 20px; font-weight: 800;
   color: var(--item-color, var(--accent));
-  box-shadow: inset 0 0 0 2px currentColor;
-  transition: transform var(--med) var(--ease-snap);
+  background: color-mix(in srgb, var(--item-color, var(--accent)) 15%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--item-color, var(--accent)) 38%, transparent);
+  transition: transform var(--med) var(--ease-snap), background var(--fast) linear;
 }
-.menu-item:hover .menu-icon { transform: skewX(var(--unskew)) scale(1.12); }
+.menu-item:hover .menu-icon {
+  transform: skewX(var(--unskew)) scale(1.07);
+  background: color-mix(in srgb, var(--item-color, var(--accent)) 26%, transparent);
+}
 
 .menu-text { flex: 1; min-width: 0; }
 .menu-title {
   font-family: var(--font-display);
-  font-size: 27px; font-weight: 800; line-height: 1;
-  letter-spacing: 0.02em; text-transform: uppercase;
+  font-size: 25px; font-weight: 800; line-height: 1.05;
+  letter-spacing: 0.015em; text-transform: uppercase;
 }
-.menu-desc { font-size: 13px; color: var(--dim); margin-top: 4px; }
+.menu-desc { font-size: 13px; color: var(--dim); margin-top: 3px; line-height: 1.45; }
 .menu-meta {
   font-family: var(--font-mono); font-size: 11px; color: var(--faint);
   text-align: right; line-height: 1.5;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------------------------------------------------------------- panels */
 
+/* Depth is one hairline plus a lit top edge — the way a real panel catches
+   the light — not a shadow. Only things that float get a shadow. */
 .panel {
   background: var(--surface);
-  padding: 20px 22px;
-  box-shadow: inset 0 0 0 1px var(--line);
+  padding: 19px 21px;
+  box-shadow:
+    inset 0 1px 0 var(--edge),
+    inset 0 0 0 1px var(--line);
 }
+.panel.raised {
+  box-shadow: inset 0 1px 0 var(--edge), inset 0 0 0 1px var(--line-2), 0 26px 54px -40px #000;
+}
+
 .panel-title {
-  font-size: 11px; letter-spacing: 0.24em; text-transform: uppercase;
+  font-size: 12px; letter-spacing: 0.02em;
   color: var(--dim); font-weight: 700;
-  margin-bottom: 14px;
-  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 15px;
+  display: flex; align-items: center; gap: 9px;
 }
 .panel-title::before {
-  content: ''; width: 3px; height: 12px; background: var(--accent);
+  content: ''; width: 3px; height: 13px; background: var(--accent);
   transform: skewX(var(--skew)); flex-shrink: 0;
 }
+
+/* Something belongs here and is not here yet. Says so quietly, centred,
+   instead of leaving a panel-sized hole in the layout. */
+.empty {
+  flex: 1; min-height: 90px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; text-align: center; color: var(--faint);
+  font-size: 13px; padding: 20px 12px;
+}
+.empty::before {
+  content: ''; width: 26px; height: 26px;
+  box-shadow: inset 0 0 0 2px var(--line-2);
+  transform: skewX(var(--skew));
+}
+
+/* The column beside a main list: wide enough for three stat cells, never
+   wider. Letting it flex made the menu and the panels fight for the middle
+   of the screen and neither won. */
+.side-column {
+  width: 372px; flex-shrink: 0;
+  display: flex; flex-direction: column; gap: 14px; min-height: 0;
+}
+.side-column .panel { flex-shrink: 0; }
+
+/* A seat nobody is in. Dashed rather than solid so it reads as a gap in the
+   list, not another row of content. */
+.seat-open {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 58px; margin-top: 6px;
+  font-size: 12px; color: var(--faint);
+  border: 1px dashed var(--line-2);
+}
+
+/* One measure for full-width content, matching the menu, so a table does
+   not stretch to the far corners of a wide monitor. */
+.board-measure { width: 100%; max-width: 1150px; margin: 0 auto; }
+#screen-leaderboard .topbar { width: 100%; max-width: 1150px; margin-left: auto; margin-right: auto; }
 
 .row { display: flex; gap: 14px; }
 .col { display: flex; flex-direction: column; gap: 14px; }
@@ -513,8 +672,11 @@ body.in-game .bg-glow { opacity: 0.4; }
 
 .table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .table th {
-  text-align: left; font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase;
-  color: var(--faint); font-weight: 700; padding: 10px 12px;
+  text-align: left; font-size: 10px; letter-spacing: var(--track); text-transform: uppercase;
+  color: var(--faint); font-weight: 700; padding: 11px 12px;
+  /* Tracking makes a four-letter heading wider than its column looks; without
+     this, RANK wraps to RAN / K. */
+  white-space: nowrap;
   position: sticky; top: 0; background: var(--surface); z-index: 1;
 }
 .table th::after {
@@ -525,9 +687,12 @@ body.in-game .bg-glow { opacity: 0.4; }
 .table tbody tr { transition: background var(--fast) linear; }
 .table tbody tr:hover td { background: rgba(255,255,255,0.03); }
 .table tr.me td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.table .num { font-family: var(--font-mono); text-align: right; font-size: 13px; }
+.table .num {
+  font-family: var(--font-mono); text-align: right; font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
 .table .pos { font-family: var(--font-mono); color: var(--faint); width: 56px; font-size: 13px; }
-.table .rank-col { width: 52px; }
+.table .rank-col { width: 64px; }
 .table tr.top1 .pos { color: #ffd93d; font-weight: 700; }
 .table tr.top2 .pos { color: #dfe3ee; font-weight: 700; }
 .table tr.top3 .pos { color: #e0965a; font-weight: 700; }
@@ -536,8 +701,8 @@ body.in-game .bg-glow { opacity: 0.4; }
 
 .field { display: flex; flex-direction: column; gap: 7px; }
 .field label {
-  font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase;
-  color: var(--dim); font-weight: 700;
+  font-size: 12px; letter-spacing: 0.01em;
+  color: var(--dim); font-weight: 600;
 }
 .input, select.input {
   font-family: var(--font-ui); font-size: 16px; font-weight: 600;
@@ -547,7 +712,11 @@ body.in-game .bg-glow { opacity: 0.4; }
   transition: box-shadow var(--fast) linear;
 }
 .input::placeholder { color: var(--faint); }
-.input:focus { box-shadow: inset 0 0 0 2px var(--accent); }
+.input:hover:not(:focus) { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.2); }
+.input:focus {
+  box-shadow: inset 0 0 0 1px var(--accent),
+              0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
 .input.code {
   font-family: var(--font-mono); font-weight: 700;
   text-transform: uppercase; letter-spacing: 0.42em;
@@ -792,7 +961,7 @@ canvas#board { display: block; }
 .rank-change-banner {
   margin-top: 22px; padding: 16px; text-align: center;
   font-family: var(--font-display); font-size: 22px; font-weight: 800;
-  letter-spacing: 0.14em; text-transform: uppercase;
+  letter-spacing: 0.02em; text-transform: uppercase;
   box-shadow: inset 0 0 0 2px currentColor;
   animation: rank-flash 1.6s ease-in-out infinite alternate;
 }
@@ -820,7 +989,10 @@ canvas#board { display: block; }
 
 /* ----------------------------------------------------------------- chat */
 
-.chat-log { display: flex; flex-direction: column; gap: 7px; padding-right: 4px; }
+/* Bottom anchored: a room that has said three things should show them next
+   to the box you type in, not stranded at the top of an empty column. */
+.chat-log { display: flex; flex-direction: column; justify-content: flex-end; gap: 7px; padding-right: 4px; }
+.chat-log > :first-child { margin-top: auto; }
 .chat-msg {
   font-size: 14px; line-height: 1.4; word-break: break-word;
   padding-left: 10px; border-left: 2px solid var(--line-2);
@@ -831,7 +1003,7 @@ canvas#board { display: block; }
 .chat-msg.mine { border-left-color: var(--accent); }
 .chat-msg.mine .who { color: var(--accent); }
 .chat-msg.spectator { border-left-color: var(--faint); color: var(--dim); }
-.chat-msg.spectator .who::after { content: ' (관전)'; font-size: 10px; letter-spacing: 0.08em; }
+.chat-msg.spectator .who::after { content: ' (관전)'; font-size: 10px; letter-spacing: 0; }
 .chat-msg .when { float: right; font-size: 11px; color: var(--faint); font-family: var(--font-mono); }
 .chat-msg.system { color: var(--dim); font-style: italic; }
 
@@ -899,7 +1071,7 @@ canvas#board { display: block; }
 .tabs { display: flex; gap: 4px; margin-bottom: 16px; }
 .tab {
   position: relative; isolation: isolate;
-  font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 700;
+  font-size: 13px; letter-spacing: 0.01em; font-weight: 700;
   padding: 10px 22px; cursor: pointer; color: var(--faint);
   transition: color var(--fast) linear;
 }
@@ -936,7 +1108,7 @@ canvas#board { display: block; }
 
 .badge {
   position: relative; isolation: isolate; display: inline-block;
-  font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase; font-weight: 700;
+  font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; font-weight: 700;
   padding: 4px 11px; color: var(--dim);
 }
 .badge::before {

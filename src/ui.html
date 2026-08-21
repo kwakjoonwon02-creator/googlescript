@@ -14,8 +14,9 @@
   <section class="screen" id="screen-auth">
     <div class="auth-shell">
       <div class="auth-brand">
+        <p class="kicker">Google Apps Script Tetris</p>
         <h1 class="title-xl">TETRA<span class="dot">.</span>GS</h1>
-        <p class="subtitle">계정으로 기록과 레이팅이 이어집니다</p>
+        <p class="subtitle">계정 하나로 기록과 레이팅이 이어집니다.</p>
         <ul class="auth-points">
           <li><b>TR</b> 랭크와 래더는 계정에만 쌓입니다</li>
           <li><b>기록</b> 40 LINES · BLITZ 개인 기록이 저장됩니다</li>
@@ -77,9 +78,10 @@
       </div>
     </div>
 
-    <div class="row grow" style="gap:34px">
-      <div style="flex:1.35;min-width:0;display:flex;flex-direction:column;justify-content:center">
-        <h1 class="title-xl" style="margin-bottom:26px">TETRA<span class="dot">.</span>GS</h1>
+    <div class="row grow menu-columns">
+      <div class="menu-column">
+        <p class="kicker">Select a mode</p>
+        <h1 class="title-xl" style="margin-bottom:22px">TETRA<span class="dot">.</span>GS</h1>
         <div class="menu-list">
 
           <div class="menu-item" data-nav="solo" style="--item-color:#4dd6ff">
@@ -126,10 +128,10 @@
         </div>
       </div>
 
-      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:14px">
+      <div class="side-column">
         <div class="panel">
           <div class="panel-title">내 전적</div>
-          <div class="stat-grid" style="grid-template-columns:repeat(3,1fr)">
+          <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-top:0">
             <div class="stat-cell"><div class="k">APM</div><div class="v" id="me-apm">0.0</div></div>
             <div class="stat-cell"><div class="k">PPS</div><div class="v" id="me-pps">0.00</div></div>
             <div class="stat-cell"><div class="k">VS</div><div class="v" id="me-vs">0.0</div></div>
@@ -137,13 +139,13 @@
             <div class="stat-cell"><div class="k">Blitz</div><div class="v" id="me-blitz">—</div></div>
             <div class="stat-cell"><div class="k">Peak</div><div class="v" id="me-peak">—</div></div>
           </div>
-          <div class="hint center" id="me-placement" style="margin-top:12px"></div>
+          <div class="hint center" id="me-placement" style="margin-top:14px"></div>
         </div>
 
         <div class="panel grow" style="display:flex;flex-direction:column;min-height:0">
           <div class="panel-title">최근 경기</div>
-          <div class="scroll grow" id="recent-matches">
-            <p class="hint">아직 기록이 없습니다.</p>
+          <div class="scroll fade-scroll grow" id="recent-matches" style="display:flex;flex-direction:column">
+            <div class="empty">아직 기록이 없습니다</div>
           </div>
         </div>
       </div>
@@ -274,7 +276,7 @@
       <div class="panel grow" style="display:flex;flex-direction:column;min-height:0">
         <div class="panel-title">채팅</div>
         <div class="scroll grow chat-log" id="chat-log">
-          <p class="hint">아직 대화가 없습니다.</p>
+          <div class="empty">아직 대화가 없습니다</div>
         </div>
         <div class="row" style="margin-top:10px">
           <input class="input grow" id="chat-input" maxlength="200" placeholder="메시지를 입력하고 Enter">
@@ -291,7 +293,7 @@
           <div class="panel-title">초대</div>
           <div class="input code" id="room-code-big" style="cursor:pointer">—</div>
         </div>
-        <button class="btn primary wide" id="btn-ready" style="font-size:19px;padding:16px">준비</button>
+        <button class="btn primary wide lg" id="btn-ready">준비</button>
         <p class="hint center" id="room-hint">모든 플레이어가 준비하면 시작합니다.</p>
       </div>
     </div>
@@ -324,13 +326,15 @@
       </div>
       <span class="hint" id="lb-meta"></span>
     </div>
-    <div class="tabs">
-      <div class="tab active" data-lb="ranked">TR 랭킹</div>
-      <div class="tab" data-lb="sprint">40 LINES</div>
-      <div class="tab" data-lb="blitz">BLITZ</div>
-    </div>
-    <div class="panel grow scroll" id="lb-body" style="min-height:0">
-      <p class="hint">불러오는 중…</p>
+    <div class="board-measure grow" style="display:flex;flex-direction:column;min-height:0">
+      <div class="tabs">
+        <div class="tab active" data-lb="ranked">TR 랭킹</div>
+        <div class="tab" data-lb="sprint">40 LINES</div>
+        <div class="tab" data-lb="blitz">BLITZ</div>
+      </div>
+      <div class="panel grow scroll" id="lb-body" style="min-height:0;display:flex;flex-direction:column">
+        <p class="hint">불러오는 중…</p>
+      </div>
     </div>
   </section>
 
