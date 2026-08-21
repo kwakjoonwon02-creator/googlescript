@@ -9,7 +9,7 @@ const SRC = path.join(__dirname, '..', '..', 'src');
 
 /** Server files, in the order Apps Script would evaluate them. */
 const SERVER_FILES = [
-  'Store.gs', 'Glicko.gs', 'Ranks.gs', 'Players.gs',
+  'Store.gs', 'Glicko.gs', 'Ranks.gs', 'Players.gs', 'Accounts.gs',
   'Leaderboard.gs', 'Rooms.gs', 'Matchmaking.gs', 'Code.gs'
 ];
 

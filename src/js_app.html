@@ -102,6 +102,9 @@ var App = (function () {
 
     var nameField = U.$('#cfg-name');
     if (nameField && document.activeElement !== nameField) nameField.value = p.name;
+
+    var identity = U.$('#identity');
+    if (identity) identity.classList.toggle('guest', !!p.guest);
   }
 
   function refreshProfile() {
@@ -140,21 +143,168 @@ var App = (function () {
 
   function boot() {
     U.$('#boot-status').textContent = '서버에 연결하는 중…';
+    buildKeybindUI();
     Net.bootstrap().then(function (data) {
-      updateProfile(data.profile);
-      refreshProfile();
-      buildKeybindUI();
-      syncConfigUI();
-      if (data.isNew) {
-        showScreen('menu');
-        askName(true);
-      } else {
-        showScreen('menu');
-      }
+      if (data.authed) { enterApp(data); return; }
+      showScreen('auth');
+      setTimeout(function () { U.$('#auth-name').focus(); }, 80);
     }).catch(function (err) {
       U.$('#boot-status').innerHTML = '연결 실패: ' + U.escapeHtml(err.message) +
         '<br><br><button class="btn sm" onclick="location.reload()">다시 시도</button>';
     });
+  }
+
+  /** Signed in: fill everything the menu shows and go. */
+  function enterApp(data) {
+    updateProfile(data.profile);
+    syncConfigUI();
+    showScreen('menu');
+    refreshProfile();
+  }
+
+  /* ------------------------------------------------------------ sign in */
+
+  var authMode = 'login';
+
+  function setAuthMode(mode) {
+    authMode = mode;
+    U.$$('[data-auth-tab]').forEach(function (tab) {
+      tab.classList.toggle('active', tab.getAttribute('data-auth-tab') === mode);
+    });
+    var isNew = mode === 'register';
+    U.$('#auth-pw2-field').hidden = !isNew;
+    U.$('#auth-submit').textContent = isNew ? '계정 만들기' : '로그인';
+    U.$('#auth-pw').setAttribute('autocomplete', isNew ? 'new-password' : 'current-password');
+    authError('');
+  }
+
+  function authError(message) {
+    var node = U.$('#auth-error');
+    node.textContent = message || '';
+    node.classList.toggle('show', !!message);
+  }
+
+  function authBusy(busy) {
+    U.$('#auth-submit').disabled = busy;
+    U.$('#auth-guest').disabled = busy;
+  }
+
+  function submitAuth() {
+    var name = U.$('#auth-name').value.trim();
+    var pw = U.$('#auth-pw').value;
+
+    if (authMode === 'register' && pw !== U.$('#auth-pw2').value) {
+      authError('비밀번호가 서로 다릅니다.');
+      return;
+    }
+
+    authError('');
+    authBusy(true);
+    var request = authMode === 'register' ? Net.register(name, pw) : Net.login(name, pw);
+    request.then(function (data) {
+      U.$('#auth-pw').value = '';
+      U.$('#auth-pw2').value = '';
+      enterApp(data);
+      U.toast(authMode === 'register' ? '환영합니다, ' + data.profile.name + '님' : '다시 오셨군요, ' + data.profile.name + '님', 'good');
+    }).catch(function (err) {
+      authError(err.message);
+    }).then(function () { authBusy(false); });
+  }
+
+  function wireAuth() {
+    U.$$('[data-auth-tab]').forEach(function (tab) {
+      tab.addEventListener('click', function () { setAuthMode(tab.getAttribute('data-auth-tab')); });
+    });
+    U.$('#auth-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      submitAuth();
+    });
+    // The game listens for keys globally; the sign-in screen must not.
+    ['#auth-name', '#auth-pw', '#auth-pw2'].forEach(function (sel) {
+      U.$(sel).addEventListener('keydown', function (e) { e.stopPropagation(); });
+    });
+    U.$('#auth-guest').addEventListener('click', function () {
+      authError('');
+      authBusy(true);
+      Net.guest().then(function (data) {
+        enterApp(data);
+        U.toast('게스트로 시작합니다. 설정에서 언제든 계정으로 바꿀 수 있습니다.');
+      }).catch(function (err) {
+        authError(err.message);
+      }).then(function () { authBusy(false); });
+    });
+  }
+
+  function signOut() {
+    Net.logout().catch(function () { Net.forget(); }).then(function () {
+      profile = null;
+      showScreen('auth');
+      setAuthMode('login');
+      U.$('#auth-name').value = '';
+      U.$('#auth-pw').value = '';
+      U.toast('로그아웃되었습니다.');
+    });
+  }
+
+  /**
+   * Sets a password, and for a guest that is also how the account stops
+   * being throwaway: same records, same ratings, now with a way back in.
+   */
+  function askPassword() {
+    var isGuest = !profile || profile.guest;
+    var name = U.el('input', { class: 'input', maxlength: 16, value: profile ? profile.name : '' });
+    var current = U.el('input', { class: 'input', type: 'password', maxlength: 72 });
+    var next = U.el('input', { class: 'input', type: 'password', maxlength: 72 });
+    var again = U.el('input', { class: 'input', type: 'password', maxlength: 72 });
+    var msg = U.el('p', { class: 'hint', text: isGuest
+      ? '지금까지의 기록을 그대로 가진 계정이 됩니다.'
+      : '현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿉니다.' });
+    var save = U.el('button', { class: 'btn primary wide', text: isGuest ? '계정 만들기' : '변경' });
+    var cancel = U.el('button', { class: 'btn ghost wide', text: '취소', style: 'margin-top:8px' });
+
+    var fields = [];
+    if (isGuest) fields.push(U.el('div', { class: 'field' }, [U.el('label', { text: '닉네임' }), name]));
+    else fields.push(U.el('div', { class: 'field' }, [U.el('label', { text: '현재 비밀번호' }), current]));
+    fields.push(U.el('div', { class: 'field' }, [U.el('label', { text: '새 비밀번호' }), next]));
+    fields.push(U.el('div', { class: 'field' }, [U.el('label', { text: '새 비밀번호 확인' }), again]));
+
+    var box = U.el('div', {}, [
+      U.el('div', { class: 'panel-title', text: isGuest ? '계정 만들기' : '비밀번호 변경' })
+    ].concat(fields, [msg, U.el('div', { style: 'height:14px' }), save, cancel]));
+
+    [name, current, next, again].forEach(function (input) {
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') save.click();
+        e.stopPropagation();
+      });
+    });
+    cancel.addEventListener('click', U.closeModal);
+
+    save.addEventListener('click', function () {
+      if (next.value !== again.value) {
+        msg.textContent = '비밀번호가 서로 다릅니다.';
+        msg.style.color = 'var(--bad)';
+        return;
+      }
+      save.disabled = true;
+      Net.setPassword({
+        name: isGuest ? name.value.trim() : undefined,
+        current: isGuest ? undefined : current.value,
+        password: next.value
+      }).then(function (res) {
+        updateProfile(res.profile);
+        syncConfigUI();
+        U.closeModal();
+        U.toast(isGuest ? '계정이 만들어졌습니다.' : '비밀번호가 변경되었습니다.', 'good');
+      }).catch(function (err) {
+        msg.textContent = err.message;
+        msg.style.color = 'var(--bad)';
+        save.disabled = false;
+      });
+    });
+
+    U.modal(box);
+    setTimeout(function () { (isGuest ? name : current).focus(); }, 60);
   }
 
   function askName(isNew) {
@@ -285,6 +435,11 @@ var App = (function () {
   }
 
   function startRanked() {
+    if (profile && profile.guest) {
+      U.toast('경쟁 모드는 계정이 필요합니다.', 'error');
+      askPassword();
+      return;
+    }
     showScreen('queue');
     queueStartedAt = Date.now();
     U.$('#queue-title').textContent = '상대를 찾는 중…';
@@ -748,6 +903,13 @@ var App = (function () {
   /* ------------------------------------------------------------- config */
 
   function syncConfigUI() {
+    var guest = !profile || profile.guest;
+    U.$('#cfg-account-note').textContent = guest
+      ? '게스트 세션입니다. 비밀번호를 등록하면 지금까지의 기록을 그대로 가진 계정이 됩니다.'
+      : '계정으로 로그인되어 있습니다. 닉네임이 곧 로그인 이름입니다.';
+    U.$('#btn-password').textContent = guest ? '계정 만들기' : '비밀번호 변경';
+    U.$('#btn-password').classList.toggle('primary', guest);
+
     U.$('#h-das').textContent = CONFIG.das;
     U.$('#h-arr').textContent = CONFIG.arr;
     U.$('#h-sdf').textContent = CONFIG.sdf >= 41 ? '∞' : CONFIG.sdf;
@@ -805,6 +967,8 @@ var App = (function () {
       }).catch(function (err) { U.toast(err.message, 'error'); });
     });
     U.$('#cfg-name').addEventListener('keydown', function (e) { e.stopPropagation(); });
+    U.$('#btn-password').addEventListener('click', askPassword);
+    U.$('#btn-logout').addEventListener('click', signOut);
   }
 
   function buildKeybindUI() {
@@ -913,6 +1077,7 @@ var App = (function () {
   /* --------------------------------------------------------------- init */
 
   function init() {
+    wireAuth();
     wireMenu();
     wireMulti();
     wireLeaderboard();

@@ -123,6 +123,10 @@ function MM_enterAndResolve_(player, now) {
 
 function Api_queueJoin(payload) {
   var player = Players_authenticate(payload);
+  // A rating nobody can sign back in to is not a rating.
+  if (!Accounts_hasPassword_(player)) {
+    throw new Error('경쟁 모드는 계정이 필요합니다. 설정에서 비밀번호를 등록해 주세요.');
+  }
   var now = Store_now();
   var result = MM_enterAndResolve_(player, now);
   if (!result.ran) throw new Error('매치메이킹 서버가 혼잡합니다. 다시 시도해 주세요.');

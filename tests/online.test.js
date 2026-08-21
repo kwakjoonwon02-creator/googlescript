@@ -17,16 +17,18 @@ function startServer() {
   });
 }
 
-async function setName(page, name, bootTimeout) {
+/** Registers an account through the sign-in form, the way a person would. */
+async function signUp(page, name, bootTimeout) {
   // Booting the third context of the third browser in a suite run is the
   // slowest moment in the whole test set; give it room rather than reading a
   // loaded machine as a product failure.
+  await page.waitForSelector('#screen-auth.active', { timeout: bootTimeout || 15000 });
+  await page.click('[data-auth-tab="register"]');
+  await page.fill('#auth-name', name);
+  await page.fill('#auth-pw', 'hunter2!');
+  await page.fill('#auth-pw2', 'hunter2!');
+  await page.click('#auth-submit');
   await page.waitForSelector('#screen-menu.active', { timeout: bootTimeout || 15000 });
-  if (await page.isVisible('#modal-host.open')) {
-    await page.fill('#modal-body input.input', name);
-    await page.click('#modal-body button.primary');
-    await page.waitForSelector('#modal-host:not(.open)', { state: 'attached', timeout: 8000 });
-  }
 }
 
 
@@ -81,8 +83,8 @@ async function driveMatch(loser, winner, timeoutMs) {
   let code = null;
 
   await t('both clients boot with separate profiles', async () => {
-    await setName(A, 'PlayerA');
-    await setName(B, 'PlayerB');
+    await signUp(A, 'PlayerA');
+    await signUp(B, 'PlayerB');
     eq(await A.textContent('#me-name'), 'PlayerA');
     eq(await B.textContent('#me-name'), 'PlayerB');
   });
@@ -277,7 +279,7 @@ async function driveMatch(loser, winner, timeoutMs) {
   let watchCode = null;
 
   await t('a third client joins a live room as a spectator', async () => {
-    await setName(C, 'Watcher', 45000);
+    await signUp(C, 'Watcher', 45000);
 
     // Fresh casual room: A hosts, B plays, C watches.
     for (const page of [A, B]) {

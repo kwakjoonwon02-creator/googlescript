@@ -20,6 +20,9 @@ const GAS_MOCK = `
   function Sheet(name) { this.name = name; this.rows = []; }
   Sheet.prototype.getName = function () { return this.name; };
   Sheet.prototype.getLastRow = function () { return this.rows.length; };
+  Sheet.prototype.getLastColumn = function () {
+    return this.rows.reduce(function (w, r) { return Math.max(w, r.length); }, 0);
+  };
   Sheet.prototype.setFrozenRows = function () { return this; };
   Sheet.prototype.appendRow = function (r) { this.rows.push(r.slice()); return this; };
   Sheet.prototype.deleteRow = function (i) { this.rows.splice(i - 1, 1); return this; };
@@ -87,9 +90,30 @@ const GAS_MOCK = `
     waitLock: function () { if (held) throw new Error('lock already held'); held = true; },
     releaseLock: function () { held = false; }
   }; } };
-  window.Utilities = { getUuid: function () {
-    return 'uu-' + (++uuid) + '-' + Math.random().toString(16).slice(2, 10) + '-0123456789abcdef';
-  } };
+  window.Utilities = {
+    getUuid: function () {
+      return 'uu-' + (++uuid) + '-' + Math.random().toString(16).slice(2, 10) + '-0123456789abcdef';
+    },
+    /* Deliberately not a hash function. Password storage only has to be
+       deterministic for the page to work, a browser has no synchronous
+       SHA-256, and a hand-rolled one here would be a worse thing to trust
+       than an obvious stand-in. Apps Script returns signed bytes, so does
+       this. */
+    computeHmacSha256Signature: function (value, key) {
+      var text = String(key) + '\u0000' + String(value);
+      var out = [];
+      for (var b = 0; b < 32; b++) {
+        var h = (0x811c9dc5 ^ (b * 0x01000193)) | 0;
+        for (var i = 0; i < text.length; i++) {
+          h = (h ^ text.charCodeAt(i)) | 0;
+          h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) | 0;
+        }
+        var byte = (h >>> 24) & 0xff;
+        out.push(byte > 127 ? byte - 256 : byte);
+      }
+      return out;
+    }
+  };
   window.Logger = { log: function () {} };
   window.ScriptApp = { getProjectTriggers: function () { return []; } };
   window.HtmlService = {};

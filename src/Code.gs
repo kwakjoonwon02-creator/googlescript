@@ -38,6 +38,11 @@ function include(name) {
 function rpcHandlers_() {
   return {
     bootstrap: Api_bootstrap,
+    register: Api_register,
+    login: Api_login,
+    logout: Api_logout,
+    guest: Api_guest,
+    setPassword: Api_setPassword,
     setName: Api_setName,
     profile: Api_profile,
     submitSolo: Api_submitSolo,

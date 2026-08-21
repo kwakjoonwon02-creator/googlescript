@@ -6,6 +6,7 @@
  * forward to skip countdowns and interludes.
  */
 const vm = require('vm');
+const crypto = require('crypto');
 const { SERVER_FILES, read } = require('./sources');
 
 function makeGasSandbox() {
@@ -25,6 +26,7 @@ function makeGasSandbox() {
     constructor(name) { this.name = name; this.rows = []; }
     getName() { return this.name; }
     getLastRow() { return this.rows.length; }
+    getLastColumn() { return this.rows.reduce((w, r) => Math.max(w, r.length), 0); }
     setFrozenRows() { return this; }
     appendRow(row) { this.rows.push(row.slice()); return this; }
     deleteRow(rowIndex) { this.rows.splice(rowIndex - 1, 1); return this; }
@@ -120,7 +122,12 @@ function makeGasSandbox() {
   };
 
   const Utilities = {
-    getUuid: () => 'uuid-' + String(++uuidCounter).padStart(12, '0') + '-abcdef0123456789'
+    getUuid: () => 'uuid-' + String(++uuidCounter).padStart(12, '0') + '-abcdef0123456789',
+    // Apps Script hands back signed bytes; password hashing has to cope with
+    // that, so the stand-in reproduces it rather than returning a Buffer.
+    computeHmacSha256Signature: (value, key) =>
+      Array.from(crypto.createHmac('sha256', String(key)).update(String(value)).digest())
+        .map(b => (b > 127 ? b - 256 : b))
   };
 
   // rpc() logs every caught error, and several tests exercise failure paths

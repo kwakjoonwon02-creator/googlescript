@@ -54,23 +54,34 @@ var Net = (function () {
     return Object.assign({ id: creds && creds.id, token: creds && creds.token }, payload || {});
   }
 
-  function bootstrap(name) {
-    return call('bootstrap', {
-      id: creds && creds.id,
-      token: creds && creds.token,
-      name: name
-    }).then(function (data) {
+  /** Reference data every screen needs, sent with bootstrap and with sign-in. */
+  function absorb(data) {
+    if (data.credentials) {
       creds = data.credentials;
       U.save('creds', creds);
+    }
+    if (data.ranks) {
       // The clock offset is already set by call() with a latency correction;
       // recomputing it here from the payload alone would be less accurate.
       window.RANK_COLORS = {};
       data.ranks.ladder.forEach(function (r) { window.RANK_COLORS[r.name] = r.color; });
       window.RANK_COLORS[data.ranks.unranked.name] = data.ranks.unranked.color;
       window.RANK_TABLE = data.ranks;
-      window.RULE_SCHEMA = data.rules || {};
-      return data;
-    });
+    }
+    if (data.rules) window.RULE_SCHEMA = data.rules;
+    return data;
+  }
+
+  function bootstrap() {
+    return call('bootstrap', {
+      id: creds && creds.id,
+      token: creds && creds.token
+    }).then(absorb);
+  }
+
+  function forget() {
+    creds = null;
+    U.save('creds', null);
   }
 
   /* ---------------------------------------------------------- sync loop */
@@ -99,6 +110,16 @@ var Net = (function () {
     callRetry: callRetry,
     authed: authed,
     bootstrap: bootstrap,
+    forget: forget,
+    register: function (name, password) {
+      return call('register', { name: name, password: password }).then(absorb);
+    },
+    login: function (name, password) {
+      return call('login', { name: name, password: password }).then(absorb);
+    },
+    guest: function () { return call('guest', {}).then(absorb); },
+    logout: function () { return call('logout', authed({})).then(function (r) { forget(); return r; }); },
+    setPassword: function (payload) { return call('setPassword', authed(payload)); },
     sync: sync,
     resetSyncGate: resetSyncGate,
     serverNow: serverNow,

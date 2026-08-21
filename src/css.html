@@ -138,6 +138,107 @@ body.in-game .bg-glow { opacity: 0.4; }
 #screen-queue       { --accent: #ff4d63; --accent-ink: #1a0508; }
 #screen-leaderboard { --accent: #fbbf24; --accent-ink: #170f01; }
 #screen-config      { --accent: #4ade5e; --accent-ink: #04170a; }
+#screen-auth        { --accent: #ff6a1a; --accent-ink: #120a04; }
+
+/* ------------------------------------------------------------- sign in */
+
+.auth-shell {
+  margin: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) 400px;
+  gap: 72px;
+  align-items: center;
+  width: 100%;
+  max-width: 1000px;
+}
+
+.auth-brand .subtitle { margin-top: 12px; }
+
+.auth-points {
+  list-style: none;
+  margin: 34px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-width: 420px;
+}
+.auth-points li {
+  position: relative;
+  padding: 13px 0 13px 20px;
+  font-size: 14px;
+  color: var(--dim);
+  box-shadow: inset 0 -1px 0 var(--line);
+}
+.auth-points li::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 50%;
+  width: 6px; height: 6px;
+  margin-top: -3px;
+  background: var(--accent);
+  transform: skewX(var(--skew));
+}
+.auth-points b {
+  color: var(--text);
+  font-weight: 700;
+  margin-right: 8px;
+  letter-spacing: 0.04em;
+}
+
+.auth-card {
+  position: relative;
+  background: var(--surface);
+  padding: 30px 30px 26px;
+  box-shadow: inset 0 0 0 1px var(--line-2), 0 40px 90px -50px #000;
+}
+.auth-card::before {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 3px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.auth-form { display: flex; flex-direction: column; gap: 15px; }
+.auth-form .btn { margin-top: 5px; }
+
+.auth-error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--bad);
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height var(--fast) linear, opacity var(--fast) linear;
+}
+.auth-error.show { max-height: 60px; opacity: 1; }
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 22px 0 14px;
+  color: var(--faint);
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+}
+.auth-divider::before, .auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line-2);
+}
+
+/* A guest has no rank to show off; the badge says so instead of lying. */
+.identity.guest .rank-badge { opacity: 0.45; }
+
+@media (max-width: 880px) {
+  .auth-shell { grid-template-columns: minmax(0, 1fr); gap: 32px; max-width: 420px; }
+  .auth-brand .auth-points { display: none; }
+}
 
 /* --------------------------------------------------------------- motion */
 

@@ -8,8 +8,13 @@ function ok(res) {
   return res.data;
 }
 
-function newPlayer(s, name) {
-  const d = ok(s.rpc('bootstrap', { name }));
+function newPlayer(s, name, password) {
+  const d = ok(s.rpc('register', { name, password: password || 'hunter2!' }));
+  return { id: d.credentials.id, token: d.credentials.token, name: d.profile.name, profile: d.profile };
+}
+
+function newGuest(s) {
+  const d = ok(s.rpc('guest', {}));
   return { id: d.credentials.id, token: d.credentials.token, name: d.profile.name, profile: d.profile };
 }
 
@@ -33,21 +38,172 @@ function sync(s, pl, code, state) {
 }
 
 section('accounts');
-t('bootstrap issues distinct credentials', () => {
+t('registering issues distinct credentials', () => {
   const s = makeSandbox();
   const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo');
   assert(a.id !== b.id, 'ids collide');
   assert(a.token !== b.token, 'tokens collide');
   eq(a.profile.tr, 12500, 'starting TR');
   eq(a.profile.rank, 'Z', 'starts unranked');
+  eq(a.profile.guest, false, 'a registered account is not a guest');
 });
 
 t('an existing session is restored, not duplicated', () => {
   const s = makeSandbox();
   const a = newPlayer(s, 'Alpha');
   const again = ok(s.rpc('bootstrap', { id: a.id, token: a.token }));
+  eq(again.authed, true, 'session restored');
   eq(again.credentials.id, a.id, 'same id');
   eq(again.profile.name, 'Alpha', 'same name');
+});
+
+t('bootstrap without credentials hands out nothing', () => {
+  const s = makeSandbox();
+  const d = ok(s.rpc('bootstrap', {}));
+  eq(d.authed, false, 'nobody is signed in');
+  eq(d.credentials, undefined, 'no account was created for a stranger');
+  assert(d.ranks && d.rules, 'reference data still comes back for the sign-in screen');
+});
+
+t('signing in returns the same account', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha', 'correct horse');
+  const back = ok(s.rpc('login', { name: 'Alpha', password: 'correct horse' }));
+  eq(back.credentials.id, a.id, 'same account');
+  eq(back.profile.name, 'Alpha', 'same name');
+});
+
+t('the name is not case sensitive to sign in with', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha', 'correct horse');
+  eq(ok(s.rpc('login', { name: 'ALPHA', password: 'correct horse' })).credentials.id, a.id, 'same account');
+});
+
+t('a wrong password is refused, and says no more than that', () => {
+  const s = makeSandbox();
+  newPlayer(s, 'Alpha', 'correct horse');
+  const wrong = s.rpc('login', { name: 'Alpha', password: 'wrong horse' });
+  const missing = s.rpc('login', { name: 'Nobody', password: 'wrong horse' });
+  eq(wrong.ok, false, 'wrong password should fail');
+  eq(missing.ok, false, 'unknown name should fail');
+  eq(wrong.error, missing.error, 'the two must not be distinguishable');
+});
+
+t('the password is not stored, and neither is anything reversible', () => {
+  const s = makeSandbox();
+  newPlayer(s, 'Alpha', 'correct horse');
+  const row = s.Store_readAll('Players')[0];
+  assert(row.pwHash && row.pwSalt, 'no hash was written');
+  assert(String(row.pwHash).indexOf('correct') === -1, 'the password is in the sheet');
+  assert(row.pwHash.length === 64, 'expected a 32-byte digest as hex');
+  const other = ok(s.rpc('register', { name: 'Bravo', password: 'correct horse' }));
+  const rows = s.Store_readAll('Players');
+  assert(rows[0].pwHash !== rows[1].pwHash, 'the same password hashed the same way twice');
+  assert(other.credentials.token !== rows[0].token, 'tokens collide');
+});
+
+t('repeated wrong guesses are throttled', () => {
+  const s = makeSandbox();
+  newPlayer(s, 'Alpha', 'correct horse');
+  let refused = null;
+  for (let i = 0; i < 14 && refused === null; i++) {
+    const res = s.rpc('login', { name: 'Alpha', password: 'nope' });
+    if (/너무 많/.test(res.error || '')) refused = i;
+  }
+  assert(refused !== null, 'guessing was never throttled');
+  assert(refused <= 10, 'throttle kicked in too late: ' + refused);
+  eq(s.rpc('login', { name: 'Alpha', password: 'correct horse' }).ok, false, 'the throttle let the right password through');
+});
+
+t('getting it right clears the count against you', () => {
+  const s = makeSandbox();
+  newPlayer(s, 'Alpha', 'correct horse');
+  // A few fat-fingered attempts, then a success, then a few more. Somebody
+  // who keeps mistyping their own password must not lock themselves out.
+  for (let i = 0; i < 6; i++) s.rpc('login', { name: 'Alpha', password: 'nope' });
+  ok(s.rpc('login', { name: 'Alpha', password: 'correct horse' }));
+  for (let i = 0; i < 6; i++) s.rpc('login', { name: 'Alpha', password: 'nope' });
+  eq(ok(s.rpc('login', { name: 'Alpha', password: 'correct horse' })).profile.name, 'Alpha', 'locked out');
+});
+
+t('signing out makes the old token worthless', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha');
+  ok(s.rpc('logout', { id: a.id, token: a.token }));
+  eq(s.rpc('profile', { id: a.id, token: a.token }).ok, false, 'the old token still works');
+  const back = ok(s.rpc('login', { name: 'Alpha', password: 'hunter2!' }));
+  assert(back.credentials.token !== a.token, 'a new token was not issued');
+  eq(ok(s.rpc('profile', back.credentials)).profile.name, 'Alpha', 'cannot sign back in');
+});
+
+t('a name cannot be registered twice', () => {
+  const s = makeSandbox();
+  newPlayer(s, 'Alpha');
+  eq(s.rpc('register', { name: 'Alpha', password: 'hunter2!' }).ok, false, 'duplicate name');
+  eq(s.rpc('register', { name: 'alpha', password: 'hunter2!' }).ok, false, 'duplicate but for case');
+  eq(s.rpc('register', { name: 'Alpha', password: 'sh0rt' }).ok, false, 'short password');
+  eq(s.rpc('register', { name: 'x', password: 'hunter2!' }).ok, false, 'short name');
+});
+
+section('guests');
+t('a guest can play, but not ranked', () => {
+  const s = makeSandbox();
+  const g = newGuest(s);
+  eq(g.profile.guest, true, 'flagged as a guest');
+  const res = s.rpc('queueJoin', { id: g.id, token: g.token });
+  eq(res.ok, false, 'a guest got into the ranked queue');
+  assert(/계정/.test(res.error), 'unexpected error: ' + res.error);
+
+  // Everything else is open to them.
+  const room = ok(s.rpc('roomCreate', { id: g.id, token: g.token }));
+  assert(room.room.code, 'a guest cannot make a room');
+  ok(s.rpc('submitSolo', { id: g.id, token: g.token, mode: 'sprint', completed: true, timeMs: 41000, stats: { lines: 40, pieces: 100 } }));
+});
+
+t('a guest keeps everything when they set a password', () => {
+  const s = makeSandbox();
+  const g = newGuest(s);
+  ok(s.rpc('submitSolo', {
+    id: g.id, token: g.token, mode: 'sprint', completed: true,
+    timeMs: 41000, stats: { lines: 40, pieces: 100 }
+  }));
+
+  const claimed = ok(s.rpc('setPassword', {
+    id: g.id, token: g.token, name: 'Charlie', password: 'hunter2!'
+  }));
+  eq(claimed.profile.guest, false, 'still a guest');
+  eq(claimed.profile.name, 'Charlie', 'name not taken');
+  eq(claimed.profile.sprintBest, 41000, 'the record was lost');
+
+  const back = ok(s.rpc('login', { name: 'Charlie', password: 'hunter2!' }));
+  eq(back.credentials.id, g.id, 'signing in landed on a different account');
+  eq(back.profile.sprintBest, 41000, 'the record did not survive the round trip');
+  eq(ok(s.rpc('queueJoin', back.credentials)).matched, false, 'ranked is still refused');
+});
+
+t('changing a password needs the current one', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha', 'correct horse');
+  eq(s.rpc('setPassword', { id: a.id, token: a.token, password: 'new one!' }).ok, false, 'no current password given');
+  eq(s.rpc('setPassword', { id: a.id, token: a.token, current: 'wrong', password: 'new one!' }).ok, false, 'wrong current password');
+  ok(s.rpc('setPassword', { id: a.id, token: a.token, current: 'correct horse', password: 'new one!' }));
+  eq(s.rpc('login', { name: 'Alpha', password: 'correct horse' }).ok, false, 'the old password still works');
+  eq(ok(s.rpc('login', { name: 'Alpha', password: 'new one!' })).profile.name, 'Alpha', 'the new one does not');
+});
+
+t('an account from before passwords existed still works', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha');
+  // Blank out the credentials columns, which is what an older sheet holds.
+  const row = s.Store_readAll('Players')[0];
+  s.Store_writeRow('Players', row._row, Object.assign(row, { pwHash: '', pwSalt: '', guest: '' }));
+  s.__evict('player:');
+
+  const session = ok(s.rpc('bootstrap', { id: a.id, token: a.token }));
+  eq(session.authed, true, 'the stored session stopped working');
+  eq(session.profile.guest, true, 'an account with no password is a guest');
+  ok(s.rpc('setPassword', { id: a.id, token: a.token, password: 'hunter2!' }));
+  eq(ok(s.rpc('login', { name: 'Alpha', password: 'hunter2!' })).credentials.id, a.id, 'could not adopt the account');
 });
 
 t('a bad token is rejected', () => {

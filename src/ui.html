@@ -10,6 +10,55 @@
     </div>
   </section>
 
+  <!-- ============================================================ AUTH -->
+  <section class="screen" id="screen-auth">
+    <div class="auth-shell">
+      <div class="auth-brand">
+        <h1 class="title-xl">TETRA<span class="dot">.</span>GS</h1>
+        <p class="subtitle">계정으로 기록과 레이팅이 이어집니다</p>
+        <ul class="auth-points">
+          <li><b>TR</b> 랭크와 래더는 계정에만 쌓입니다</li>
+          <li><b>기록</b> 40 LINES · BLITZ 개인 기록이 저장됩니다</li>
+          <li><b>전적</b> 최근 경기와 TR 변동이 남습니다</li>
+        </ul>
+      </div>
+
+      <div class="auth-card">
+        <div class="tabs" id="auth-tabs">
+          <button class="tab active" data-auth-tab="login">로그인</button>
+          <button class="tab" data-auth-tab="register">회원가입</button>
+        </div>
+
+        <form class="auth-form" id="auth-form" autocomplete="on">
+          <div class="field">
+            <label for="auth-name">닉네임</label>
+            <input class="input" id="auth-name" name="username" maxlength="16"
+                   autocomplete="username" spellcheck="false" placeholder="2~16자">
+          </div>
+          <div class="field">
+            <label for="auth-pw">비밀번호</label>
+            <input class="input" id="auth-pw" name="password" type="password" maxlength="72"
+                   autocomplete="current-password" placeholder="6자 이상">
+          </div>
+          <div class="field" id="auth-pw2-field" hidden>
+            <label for="auth-pw2">비밀번호 확인</label>
+            <input class="input" id="auth-pw2" type="password" maxlength="72"
+                   autocomplete="new-password">
+          </div>
+
+          <p class="auth-error" id="auth-error" role="alert"></p>
+          <button class="btn primary wide" id="auth-submit" type="submit">로그인</button>
+        </form>
+
+        <div class="auth-divider"><span>또는</span></div>
+        <button class="btn ghost wide" id="auth-guest">게스트로 둘러보기</button>
+        <p class="hint center" style="margin-top:10px">
+          게스트는 솔로·CPU·일반 방까지 가능하고, 경쟁 모드는 계정이 필요합니다.
+        </p>
+      </div>
+    </div>
+  </section>
+
   <!-- ============================================================ MENU -->
   <section class="screen" id="screen-menu">
     <div class="topbar">
@@ -355,12 +404,15 @@
 
       <div style="width:300px;display:flex;flex-direction:column;gap:14px">
         <div class="panel">
-          <div class="panel-title">프로필</div>
+          <div class="panel-title">계정</div>
           <div class="field">
             <label>닉네임</label>
             <input class="input" id="cfg-name" maxlength="16">
           </div>
-          <button class="btn wide" id="btn-save-name" style="margin-top:12px">저장</button>
+          <button class="btn wide" id="btn-save-name" style="margin-top:12px">닉네임 저장</button>
+          <p class="hint" id="cfg-account-note" style="margin-top:14px"></p>
+          <button class="btn wide" id="btn-password" style="margin-top:10px">비밀번호 변경</button>
+          <button class="btn ghost wide" id="btn-logout" style="margin-top:8px">로그아웃</button>
         </div>
         <div class="panel">
           <div class="panel-title">CPU 난이도</div>

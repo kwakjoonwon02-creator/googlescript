@@ -1,9 +1,10 @@
 /**
- * Player accounts, profiles and persistent stats.
+ * Player profiles and persistent stats.
  *
  * The web app is deployed anonymously, so identity is a client-held
- * (id, token) pair issued on first visit and kept in localStorage. Every
- * mutating call re-checks the token against the sheet.
+ * (id, token) pair kept in localStorage. Every mutating call re-checks the
+ * token against the sheet. Where that pair comes from — registration, login
+ * or a guest session — is Accounts.gs.
  */
 
 var PLAYERS = {
@@ -67,7 +68,8 @@ function Players_create_(name) {
     streak: 0, bestStreak: 0,
     apm: 0, pps: 0, vs: 0,
     sprintBest: 0, blitzBest: 0,
-    totalLines: 0, totalPieces: 0
+    totalLines: 0, totalPieces: 0,
+    pwHash: '', pwSalt: '', guest: false
   };
   player._row = Store_appendRow('Players', player);
   Store_cachePut(Players_cacheKey_(player.id), player, STORE.PLAYER_CACHE_TTL);
@@ -119,50 +121,47 @@ function Players_publicView(player) {
     blitzBest: Number(player.blitzBest),
     totalLines: Number(player.totalLines),
     totalPieces: Number(player.totalPieces),
-    placementsLeft: Math.max(0, GLICKO.PLACEMENT_GAMES - Number(player.games))
+    placementsLeft: Math.max(0, GLICKO.PLACEMENT_GAMES - Number(player.games)),
+    // An account with no password cannot be signed back into, so it is a
+    // guest whatever the column says.
+    guest: !Accounts_hasPassword_(player)
   };
 }
 
 /* --------------------------------------------------------------- endpoints */
 
 /**
- * First call of every session. Creates the account when the client has no
- * stored credentials, otherwise refreshes the profile.
+ * First call of every session. Restores the session the client already has,
+ * or reports that there is none so the client can show the sign-in screen.
+ * It no longer creates an account for whoever happens to load the page.
+ *
+ * The reference data comes back either way, so the sign-in screen and the
+ * game behind it are one round trip apart rather than two.
  */
 function Api_bootstrap(payload) {
-  var player = null;
+  var base = {
+    ranks: Ranks_clientTable(),
+    rules: Rooms_ruleSchema(),
+    server: { time: Store_now(), version: APP.version, name: APP.name }
+  };
 
+  var player = null;
   if (payload.id && payload.token) {
     var existing = Players_get(payload.id);
     if (existing && String(existing.token) === String(payload.token)) player = existing;
   }
+  if (!player) return Object.assign(base, { authed: false });
 
-  if (!player) {
-    // Under the lock: appendRow + getLastRow is only a safe way to learn our
-    // own row number if no other execution can append between the two.
-    var created = Store_withLock(15000, function () {
-      var name = payload.name
-        ? Players_normalizeName_(payload.name)
-        : ('Player' + Math.floor(Math.random() * 9000 + 1000));
-      if (Players_nameTaken_(name)) name = name.slice(0, 12) + Math.floor(Math.random() * 900 + 100);
-      return Players_create_(name);
-    });
-    if (!created.ran) throw new Error('서버가 혼잡합니다. 잠시 후 다시 시도해 주세요.');
-    player = created.value;
-  } else {
-    player.lastSeen = Store_now();
-    player.rank = Ranks_resolve(Number(player.tr), Number(player.games));
-    Players_save(player);
-  }
+  player.lastSeen = Store_now();
+  player.rank = Ranks_resolve(Number(player.tr), Number(player.games));
+  Players_save(player);
 
-  return {
+  return Object.assign(base, {
+    authed: true,
     credentials: { id: player.id, token: player.token },
     profile: Players_publicView(player),
-    ranks: Ranks_clientTable(),
-    rules: Rooms_ruleSchema(),
-    server: { time: Store_now(), version: APP.version, name: APP.name },
     isNew: Number(player.games) === 0 && Number(player.totalPieces) === 0
-  };
+  });
 }
 
 function Api_setName(payload) {

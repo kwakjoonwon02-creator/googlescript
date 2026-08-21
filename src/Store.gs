@@ -21,7 +21,10 @@ var STORE = {
       'id', 'token', 'name', 'created', 'lastSeen',
       'glicko', 'rd', 'vol', 'tr', 'peakTr', 'rank', 'bestRank',
       'games', 'wins', 'losses', 'roundsWon', 'roundsLost', 'streak', 'bestStreak',
-      'apm', 'pps', 'vs', 'sprintBest', 'blitzBest', 'totalLines', 'totalPieces'
+      'apm', 'pps', 'vs', 'sprintBest', 'blitzBest', 'totalLines', 'totalPieces',
+      // Appended, never inserted: an older sheet keeps its rows lined up and
+      // only picks up blanks here, which read as an account with no password.
+      'pwHash', 'pwSalt', 'guest'
     ],
     Matches: [
       'id', 'ts', 'mode', 'p1', 'p1name', 'p2', 'p2name',
@@ -75,11 +78,20 @@ function Store_ensureSheet_(ss, name, headers) {
   var sh = ss.getSheetByName(name);
   if (!sh) sh = ss.insertSheet(name);
   if (sh.getLastRow() === 0) {
-    sh.getRange(1, 1, 1, headers.length).setValues([headers]);
-    sh.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#20222e').setFontColor('#ffffff');
+    Store_writeHeader_(sh, headers);
     sh.setFrozenRows(1);
+  } else if (sh.getLastColumn() < headers.length) {
+    // A sheet from an earlier version. Columns are only ever appended, so
+    // the rows below already line up; only the labels are missing.
+    Store_writeHeader_(sh, headers);
   }
   return sh;
+}
+
+function Store_writeHeader_(sh, headers) {
+  sh.getRange(1, 1, 1, headers.length).setValues([headers]);
+  sh.getRange(1, 1, 1, headers.length)
+    .setFontWeight('bold').setBackground('#20222e').setFontColor('#ffffff');
 }
 
 function Store_sheet(name) {

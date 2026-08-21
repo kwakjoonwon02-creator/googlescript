@@ -12,16 +12,44 @@ const { testAsync: t, assert, eq, section, note, finish } = require('./lib/repor
   const browser = await chromium.launch(launchOptions());
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const consoleErrors = [];
+  /* Two tests fail on purpose — a wrong password, and a duplicate name — so
+     the error budget has to know the difference between a bug and a case the
+     suite went out of its way to provoke. */
+  const EXPECTED = /rpc\((login|register)\) failed/;
   page.on('console', m => { if (m.type() === 'error') consoleErrors.push(m.text()); });
   page.on('pageerror', e => consoleErrors.push('pageerror: ' + e.message));
 
   await page.goto('file://' + pagePath);
 
-  section('boot');
-  await t('the menu appears after bootstrap', async () => {
+  section('sign in');
+  await t('a first visit lands on the sign-in screen, not in the game', async () => {
+    await page.waitForSelector('#screen-auth.active', { timeout: 10000 });
+    eq(await page.isVisible('#screen-menu'), false, 'the menu was reachable without an account');
+    // Nothing was created for merely loading the page.
+    const players = await page.evaluate(() => Store_readAll('Players').length);
+    eq(players, 0, 'an account was made for a visitor who did nothing');
+  });
+
+  await t('a bad sign-in is refused and says so on the form', async () => {
+    await page.click('[data-auth-tab="login"]');
+    await page.fill('#auth-name', 'Nobody');
+    await page.fill('#auth-pw', 'whatever');
+    await page.click('#auth-submit');
+    await page.waitForSelector('#auth-error.show', { timeout: 8000 });
+    const message = await page.textContent('#auth-error');
+    assert(/올바르지 않습니다/.test(message), 'unexpected message: ' + message);
+    eq(await page.isVisible('#screen-menu'), false, 'a failed sign-in let us in anyway');
+  });
+
+  await t('registering signs the new account straight in', async () => {
+    await page.click('[data-auth-tab="register"]');
+    await page.waitForFunction(() => !document.querySelector('#auth-pw2-field').hidden);
+    await page.fill('#auth-name', 'Tester');
+    await page.fill('#auth-pw', 'hunter2!');
+    await page.fill('#auth-pw2', 'hunter2!');
+    await page.click('#auth-submit');
     await page.waitForSelector('#screen-menu.active', { timeout: 10000 });
-    const name = await page.textContent('#me-name');
-    assert(name && name !== '—', 'profile name not filled in: ' + name);
+    eq(await page.textContent('#me-name'), 'Tester', 'name did not stick');
     // TR counts up on load, so wait for it to settle rather than catching a
     // frame mid-animation.
     await page.waitForFunction(
@@ -29,19 +57,25 @@ const { testAsync: t, assert, eq, section, note, finish } = require('./lib/repor
       null, { timeout: 8000 });
   });
 
-  await t('a nickname prompt is shown to a brand new player', async () => {
-    const open = await page.isVisible('#modal-host.open');
-    assert(open, 'no nickname modal for a new account');
-    await page.fill('#modal-body input.input', 'Tester');
-    await page.click('#modal-body button.primary');
-    await page.waitForSelector('#modal-host:not(.open)', { state: 'attached', timeout: 5000 });
-    eq(await page.textContent('#me-name'), 'Tester', 'name did not stick');
+  await t('mistyping the second password never reaches the server', async () => {
+    const before = await page.evaluate(() => Store_readAll('Players').length);
+    await page.evaluate(() => { App.showScreen('auth'); });
+    await page.click('[data-auth-tab="register"]');
+    await page.fill('#auth-name', 'Mismatch');
+    await page.fill('#auth-pw', 'hunter2!');
+    await page.fill('#auth-pw2', 'hunter3!');
+    await page.click('#auth-submit');
+    await page.waitForSelector('#auth-error.show', { timeout: 5000 });
+    assert(/서로 다릅니다/.test(await page.textContent('#auth-error')), 'wrong message');
+    eq(await page.evaluate(() => Store_readAll('Players').length), before, 'an account was created anyway');
+    await page.evaluate(() => { App.showScreen('menu'); });
   });
 
   await t('no uncaught errors during boot', async () => {
     const errs = await page.evaluate(() => window.__errors);
     assert(errs.length === 0, 'errors: ' + JSON.stringify(errs));
-    const bad = consoleErrors.filter(e => !/favicon|fonts\.(googleapis|gstatic)|ERR_/.test(e));
+    const bad = consoleErrors.filter(
+      e => !/favicon|fonts\.(googleapis|gstatic)|ERR_/.test(e) && !EXPECTED.test(e));
     assert(bad.length === 0, 'console: ' + bad.join(' | '));
   });
 
@@ -522,19 +556,75 @@ const { testAsync: t, assert, eq, section, note, finish } = require('./lib/repor
     await page.waitForSelector('#screen-menu.active', { timeout: 5000 });
   });
 
+  section('account lifecycle');
+
+  await t('signing out ends the session for good', async () => {
+    await page.click('#btn-config');
+    await page.waitForSelector('#screen-config.active');
+    await page.click('#btn-logout');
+    await page.waitForSelector('#screen-auth.active', { timeout: 8000 });
+    // The credentials are gone from the browser, not just from the screen.
+    eq(await page.evaluate(() => U.load('creds', null)), null, 'credentials survived sign-out');
+  });
+
+  await t('the account is still there to sign back into', async () => {
+    await page.click('[data-auth-tab="login"]');
+    await page.fill('#auth-name', 'Tester');
+    await page.fill('#auth-pw', 'hunter2!');
+    await page.click('#auth-submit');
+    await page.waitForSelector('#screen-menu.active', { timeout: 8000 });
+    eq(await page.textContent('#me-name'), 'Tester', 'landed on the wrong account');
+    // The sprint record set earlier in this session came back with it.
+    await page.waitForFunction(
+      () => document.querySelector('#me-sprint').textContent !== '—', null, { timeout: 8000 });
+  });
+
+  await t('a guest is turned away from ranked and offered an account', async () => {
+    await page.click('#btn-config');
+    await page.waitForSelector('#screen-config.active');
+    await page.click('#btn-logout');
+    await page.waitForSelector('#screen-auth.active', { timeout: 8000 });
+    await page.click('#auth-guest');
+    await page.waitForSelector('#screen-menu.active', { timeout: 8000 });
+    assert(/^Guest/.test(await page.textContent('#me-name')), 'not signed in as a guest');
+
+    await page.click('[data-nav="ranked"]');
+    await page.waitForSelector('#modal-host.open', { timeout: 5000 });
+    eq(await page.isVisible('#screen-queue.active'), false, 'a guest reached the ranked queue');
+    assert(/계정 만들기/.test(await page.textContent('#modal-body')), 'no account prompt');
+  });
+
+  await t('a guest keeps their session when they set a password', async () => {
+    const inputs = await page.$$('#modal-body input.input');
+    await inputs[0].fill('Claimed');
+    await inputs[1].fill('hunter2!');
+    await inputs[2].fill('hunter2!');
+    await page.click('#modal-body button.primary');
+    await page.waitForSelector('#modal-host:not(.open)', { state: 'attached', timeout: 8000 });
+    eq(await page.textContent('#me-name'), 'Claimed', 'the new name did not stick');
+
+    // Ranked is open to them now.
+    await page.click('[data-nav="ranked"]');
+    await page.waitForSelector('#screen-queue.active', { timeout: 8000 });
+    await page.click('#btn-cancel-queue');
+    await page.waitForSelector('#screen-menu.active', { timeout: 8000 });
+  });
+
   section('error budget');
   await t('no uncaught errors across the whole session', async () => {
     const errs = await page.evaluate(() => window.__errors);
     assert(errs.length === 0, 'page errors: ' + JSON.stringify(errs));
-    const bad = consoleErrors.filter(e => !/favicon|fonts\.googleapis|ERR_/.test(e));
+    const bad = consoleErrors.filter(
+      e => !/favicon|fonts\.googleapis|ERR_/.test(e) && !EXPECTED.test(e));
     assert(bad.length === 0, 'console errors: ' + bad.join(' | '));
   });
 
   await t('every RPC the client made succeeded', async () => {
     const log = await page.evaluate(() => window.__rpcLog);
-    const failed = log.filter(r => !r.ok);
+    const failed = log.filter(r => !r.ok && r.method !== 'login');
     assert(failed.length === 0, 'failed rpcs: ' + JSON.stringify(failed));
-    console.log('        ' + log.length + ' RPC calls, all ok');
+    const deliberate = log.filter(r => !r.ok).length;
+    console.log('        ' + log.length + ' RPC calls, ' + deliberate + ' refused on purpose');
   });
 
   await browser.close();
