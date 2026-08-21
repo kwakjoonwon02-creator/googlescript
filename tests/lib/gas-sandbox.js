@@ -27,6 +27,7 @@ function makeGasSandbox() {
     getLastRow() { return this.rows.length; }
     setFrozenRows() { return this; }
     appendRow(row) { this.rows.push(row.slice()); return this; }
+    deleteRow(rowIndex) { this.rows.splice(rowIndex - 1, 1); return this; }
     getRange(row, col, numRows, numCols) {
       const sheet = this;
       return {
@@ -149,6 +150,15 @@ function makeGasSandbox() {
       advance(ms) { offset += ms; return nowMs(); }
     },
     __cache: cache,
+    // CacheService is best-effort in production: entries disappear whenever
+    // Google feels like it. Tests use this to make that happen on purpose.
+    __evict(prefix) {
+      let n = 0;
+      for (const key of Array.from(cache.keys())) {
+        if (prefix === undefined || key.indexOf(prefix) === 0) { cache.delete(key); n++; }
+      }
+      return n;
+    },
     __lockHeld: () => lockHeld
   };
   sandbox.globalThis = sandbox;

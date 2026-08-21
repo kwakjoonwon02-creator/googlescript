@@ -30,20 +30,141 @@ var ROOMS = {
   INTERLUDE_MS: 4000,
   // A client that has not synced for this long is treated as gone.
   DROP_MS: 9000,
+  // How often a live room refreshes its row so the janitor leaves it alone,
+  // and how often a spectator refreshes their bench slot. Both are far
+  // coarser than the sync tick because both only feed a ten-minute sweep.
+  HEARTBEAT_MS: 240000,
+  SPECTATOR_BEAT_MS: 60000,
+  SPECTATOR_TTL_MS: 180000,
   ATTACK_LOG: 24
 };
 
 function Rooms_key_(code) { return 'room:' + code; }
 function Rooms_stateKey_(code, playerId) { return 'rs:' + code + ':' + playerId; }
 
+/**
+ * Rooms are read several times a second, so they live in the cache — but the
+ * cache is not storage. Apps Script drops entries whenever it likes and
+ * clears everything after six hours, and when a room went with them every
+ * client in it got ROOM_GONE and was thrown back to the menu. That is why a
+ * deployment worked for a while and then stopped: not the deployment, the
+ * cache going cold underneath it.
+ *
+ * The sheet is the record now and the cache is only the fast path in front
+ * of it. A miss costs one sheet read and refills the cache; nothing is lost.
+ *
+ * Writing through on every save is affordable because rooms barely change:
+ * the per-tick board data lives in the per-player keys, so a whole round
+ * passes without touching this record at all.
+ */
 function Rooms_load(code) {
   if (!code) return null;
-  return Store_cacheGet(Rooms_key_(String(code).toUpperCase()));
+  var upper = String(code).toUpperCase();
+  var room = Store_cacheGet(Rooms_key_(upper));
+  if (room) return room;
+  return Rooms_restore_(upper);
+}
+
+/** Rebuilds a room the cache has forgotten from its row in the sheet. */
+function Rooms_restore_(code) {
+  var row = Store_findRow('Rooms', 'code', code);
+  if (!row) return null;
+  var rec = Store_readRow('Rooms', row);
+  if (!rec) return null;
+
+  var room = null;
+  try { room = JSON.parse(rec.json); } catch (e) { room = null; }
+  if (!room || !room.code) return null;
+
+  // Freshness is the row's, not the payload's: a quiet room is kept alive by
+  // the heartbeat, which only writes the timestamp column.
+  if (Store_now() - Number(rec.updated || 0) > ROOMS.ROOM_TTL * 1000) return null;
+  room.updated = Number(rec.updated) || room.updated;
+
+  room.row = row;
+  // Everything the cache held went with the room, including the per-player
+  // state keys. Nobody is judged for DROP_MS from here, which is far longer
+  // than the tick that refills them.
+  room.restoredAt = Store_now();
+  Store_cachePut(Rooms_key_(code), room, ROOMS.ROOM_TTL);
+  return room;
 }
 
 function Rooms_save(room) {
   room.updated = Store_now();
+  Rooms_persist_(room);
   Store_cachePut(Rooms_key_(room.code), room, ROOMS.ROOM_TTL);
+}
+
+/**
+ * Writes the room to its row in the sheet, remembering the row number on the
+ * room so the next save is a single lookup. The row is re-checked before it
+ * is written to, because the janitor deletes rows and shifts everything
+ * below them up.
+ */
+function Rooms_persist_(room) {
+  var json = JSON.stringify(room);
+  // A cell holds 50k characters. Chat is the only part that grows, so trim
+  // it rather than lose the room.
+  while (json.length > 45000 && room.chat && room.chat.length > 4) {
+    room.chat = room.chat.slice(Math.ceil(room.chat.length / 2));
+    json = JSON.stringify(room);
+  }
+
+  var rec = {
+    code: room.code,
+    updated: room.updated,
+    state: room.state,
+    mode: room.mode,
+    players: room.players.length,
+    json: json
+  };
+
+  Store_withLock(8000, function () {
+    var row = Number(room.row) || 0;
+    if (row) {
+      var at = Store_readRow('Rooms', row);
+      if (!at || String(at.code) !== String(room.code)) row = 0;
+    }
+    if (!row) row = Store_findRow('Rooms', 'code', room.code);
+    if (row) {
+      Store_writeRow('Rooms', row, rec);
+    } else {
+      row = Store_appendRow('Rooms', rec);
+    }
+    room.row = row;
+  });
+}
+
+/**
+ * Marks a room as still in use without rewriting it.
+ *
+ * A room in a long match, or a lobby waiting for someone to ready up, can go
+ * many minutes without a single change — long enough for the janitor to read
+ * its row as abandoned. This touches the timestamp column and nothing else,
+ * a few times an hour, and keeps its own throttle in a separate key so the
+ * hot path never writes the room record and cannot clobber a transition.
+ */
+function Rooms_heartbeat_(code, now) {
+  var key = 'rbeat:' + code;
+  if (now - Number(Store_cacheGet(key) || 0) < ROOMS.HEARTBEAT_MS) return;
+  Store_cachePut(key, now, ROOMS.ROOM_TTL);
+  var row = Store_findRow('Rooms', 'code', code);
+  if (!row) return;
+  var col = STORE.SHEETS.Rooms.indexOf('updated') + 1;
+  Store_sheet('Rooms').getRange(row, col, 1, 1).setValues([[now]]);
+}
+
+/** Removes a room for good: cache entry, sheet row and index entry. */
+function Rooms_forget_(code) {
+  var upper = String(code).toUpperCase();
+  Store_cacheRemove(Rooms_key_(upper));
+  Store_cacheRemove('rbeat:' + upper);
+  Store_withLock(8000, function () {
+    var row = Store_findRow('Rooms', 'code', upper);
+    if (row) Store_deleteRows('Rooms', [row]);
+  });
+  Rooms_indexRemove_(upper);
 }
 
 function Rooms_seed_() {
@@ -112,10 +233,15 @@ function Rooms_ruleSchema() {
   return out;
 }
 
+function Rooms_exists_(code) {
+  if (Store_cacheGet(Rooms_key_(code))) return true;
+  return !!Store_findRow('Rooms', 'code', code);
+}
+
 function Rooms_create(player, config, mode) {
   var code = Store_roomCode();
   // Codes are short; retry on the rare collision.
-  for (var attempt = 0; attempt < 5 && Rooms_load(code); attempt++) code = Store_roomCode();
+  for (var attempt = 0; attempt < 5 && Rooms_exists_(code); attempt++) code = Store_roomCode();
 
   var room = {
     code: code,
@@ -175,34 +301,78 @@ function Rooms_spectatorIndex_(room, playerId) {
 
 function Rooms_indexUpsert_(room) {
   Store_withLock(2000, function () {
-    var index = Store_cacheGet(ROOMS.INDEX_KEY) || [];
-    index = index.filter(function (r) { return r.code !== room.code; });
+    var index = Rooms_index_().filter(function (r) { return r.code !== room.code; });
     // Rooms stay listed while a match runs so people can drop in and watch.
-    if (!room.config.isPrivate && room.mode !== 'ranked') {
-      index.push({
-        code: room.code,
-        name: room.config.name || (room.players[0] ? room.players[0].name + "'s room" : 'room'),
-        players: room.players.length,
-        max: room.config.maxPlayers,
-        spectators: (room.spectators || []).length,
-        ft: room.config.ft,
-        targeting: room.config.targeting,
-        state: room.state,
-        ts: Store_now()
-      });
-    }
+    if (!room.config.isPrivate && room.mode !== 'ranked') index.push(Rooms_indexEntry_(room));
     Store_cachePut(ROOMS.INDEX_KEY, index, ROOMS.INDEX_TTL);
   });
 }
 
 function Rooms_indexRemove_(code) {
   Store_withLock(2000, function () {
-    var index = Store_cacheGet(ROOMS.INDEX_KEY) || [];
+    var index = Rooms_index_();
     Store_cachePut(ROOMS.INDEX_KEY, index.filter(function (r) { return r.code !== code; }), ROOMS.INDEX_TTL);
   });
 }
 
+/**
+ * The public room list. Like the rooms themselves it is only cached, so a
+ * miss rebuilds it from the sheet instead of showing an empty lobby.
+ */
+function Rooms_index_() {
+  var cached = Store_cacheGet(ROOMS.INDEX_KEY);
+  if (cached) return cached;
+
+  var index = [];
+  var now = Store_now();
+  Store_readAll('Rooms').forEach(function (rec) {
+    if (now - Number(rec.updated || 0) > ROOMS.ROOM_TTL * 1000) return;
+    var room;
+    try { room = JSON.parse(rec.json); } catch (e) { return; }
+    if (!room || !room.config || room.config.isPrivate || room.mode === 'ranked') return;
+    index.push(Rooms_indexEntry_(room));
+  });
+  Store_cachePut(ROOMS.INDEX_KEY, index, ROOMS.INDEX_TTL);
+  return index;
+}
+
+function Rooms_indexEntry_(room) {
+  return {
+    code: room.code,
+    name: room.config.name || (room.players[0] ? room.players[0].name + "'s room" : 'room'),
+    players: room.players.length,
+    max: room.config.maxPlayers,
+    spectators: (room.spectators || []).length,
+    ft: room.config.ft,
+    targeting: room.config.targeting,
+    state: room.state,
+    ts: Number(room.updated) || Store_now()
+  };
+}
+
 /* ---------------------------------------------------------- state machine */
+
+/**
+ * Is this seat still in the round?
+ *
+ * "We have no state for them" is deliberately not the same as "they died".
+ * A state key can be missing because the round has only just started and
+ * they have not reported yet, or because the cache dropped it. Reading that
+ * as a death ended rounds by itself — every round in progress ended the
+ * moment the cache went cold. A seat is only out once it has been quiet for
+ * DROP_MS, timed from the last moment we could plausibly have heard from it.
+ */
+function Rooms_isAlive_(room, st, now) {
+  if (!st) return (now - Rooms_expectedFrom_(room)) < ROOMS.DROP_MS;
+  if ((now - Number(st.ts)) >= ROOMS.DROP_MS) return false;
+  // A state left over from an earlier round says nothing about this one.
+  return !(Number(st.round) === Number(room.round) && st.alive === false);
+}
+
+/** When everyone in the room was last given a reason to report in. */
+function Rooms_expectedFrom_(room) {
+  return Math.max(Number(room.startAt) || 0, Number(room.restoredAt) || 0);
+}
 
 /**
  * Advances the room if the world has moved on. Idempotent, and only called
@@ -232,11 +402,7 @@ function Rooms_advance_(room, states, now) {
   } else if (room.state === 'playing') {
     var alive = [];
     room.players.forEach(function (p) {
-      var st = states[p.id];
-      var connected = st && (now - Number(st.ts)) < ROOMS.DROP_MS;
-      // No state yet on a just-started round means still loading, not dead.
-      var isAlive = connected && (!st.round || st.round !== room.round || st.alive !== false);
-      if (isAlive) alive.push(p);
+      if (Rooms_isAlive_(room, states[p.id], now)) alive.push(p);
     });
 
     if (alive.length <= 1 && room.players.length >= 2) {
@@ -513,8 +679,7 @@ function Api_roomLeave(payload) {
     Store_cacheRemove(Rooms_stateKey_(code, player.id));
 
     if (!room.players.length && !(room.spectators || []).length) {
-      Store_cacheRemove(Rooms_key_(code));
-      Rooms_indexRemove_(code);
+      Rooms_forget_(code);
       return;
     }
     if (room.players.length && String(room.host) === String(player.id)) {
@@ -551,7 +716,7 @@ function Api_roomConfig(payload) {
 }
 
 function Api_roomList(payload) {
-  var index = Store_cacheGet(ROOMS.INDEX_KEY) || [];
+  var index = Rooms_index_();
   var now = Store_now();
   var live = index.filter(function (r) { return (now - r.ts) < ROOMS.ROOM_TTL * 1000; });
   live.sort(function (a, b) { return b.ts - a.ts; });
@@ -635,6 +800,7 @@ function Api_sync(payload) {
     });
   });
 
+  Rooms_heartbeat_(code, now);
   // Spectators keep their bench slot alive by syncing, same as players.
   if (watching) Rooms_touchSpectator_(code, id, now);
 
@@ -657,7 +823,7 @@ function Rooms_touchSpectator_(code, id, now) {
   if (!room) return;
   var idx = Rooms_spectatorIndex_(room, id);
   if (idx === -1) return;
-  if (now - Number(room.spectators[idx].ts) < ROOMS.DROP_MS / 2) return;
+  if (now - Number(room.spectators[idx].ts) < ROOMS.SPECTATOR_BEAT_MS) return;
   Store_withLock(600, function () {
     var fresh = Rooms_load(code);
     if (!fresh) return;
@@ -746,9 +912,7 @@ function Rooms_needsAdvance_(room, states, now) {
     case 'playing':
       var alive = 0;
       room.players.forEach(function (p) {
-        var st = states[p.id];
-        var connected = st && (now - Number(st.ts)) < ROOMS.DROP_MS;
-        if (connected && (!st.round || st.round !== room.round || st.alive !== false)) alive++;
+        if (Rooms_isAlive_(room, states[p.id], now)) alive++;
       });
       return alive <= 1 && room.players.length >= 2;
     default:
@@ -784,27 +948,50 @@ function Rooms_publicView_(room) {
   };
 }
 
-/** Drops rooms whose index entry has gone stale. Called by the janitor. */
+/**
+ * Deletes rooms nobody has touched for an hour and rebuilds the public list
+ * from what is left. Called by the janitor trigger; the sheet is the source
+ * of truth here, so a cold cache does not make live rooms disappear.
+ */
 function Rooms_sweep() {
   var removed = 0;
   var now = Store_now();
+
   Store_withLock(10000, function () {
-    var index = Store_cacheGet(ROOMS.INDEX_KEY) || [];
-    var kept = [];
-    index.forEach(function (entry) {
-      var room = Rooms_load(entry.code);
-      if (!room) { removed++; return; }
+    var stale = [];
+    var index = [];
+
+    Store_readAll('Rooms').forEach(function (rec) {
+      if (now - Number(rec.updated || 0) > ROOMS.ROOM_TTL * 1000) {
+        stale.push(rec._row);
+        Store_cacheRemove(Rooms_key_(String(rec.code).toUpperCase()));
+        return;
+      }
+
+      var room;
+      try { room = JSON.parse(rec.json); } catch (e) { stale.push(rec._row); return; }
+      if (!room || !room.code) { stale.push(rec._row); return; }
+      room.row = rec._row;
 
       // Spectators who stopped syncing free their bench slot.
       var before = (room.spectators || []).length;
       room.spectators = (room.spectators || []).filter(function (v) {
-        return (now - Number(v.ts)) < ROOMS.DROP_MS * 3;
+        return (now - Number(v.ts)) < ROOMS.SPECTATOR_TTL_MS;
       });
       if (room.spectators.length !== before) Rooms_save(room);
 
-      kept.push(entry);
+      if (!room.players.length && !(room.spectators || []).length) {
+        stale.push(rec._row);
+        Store_cacheRemove(Rooms_key_(room.code));
+        return;
+      }
+
+      if (!room.config.isPrivate && room.mode !== 'ranked') index.push(Rooms_indexEntry_(room));
     });
-    Store_cachePut(ROOMS.INDEX_KEY, kept, ROOMS.INDEX_TTL);
+
+    removed = Store_deleteRows('Rooms', stale);
+    Store_cachePut(ROOMS.INDEX_KEY, index, ROOMS.INDEX_TTL);
   });
+
   return removed;
 }

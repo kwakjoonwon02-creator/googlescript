@@ -22,6 +22,7 @@ const GAS_MOCK = `
   Sheet.prototype.getLastRow = function () { return this.rows.length; };
   Sheet.prototype.setFrozenRows = function () { return this; };
   Sheet.prototype.appendRow = function (r) { this.rows.push(r.slice()); return this; };
+  Sheet.prototype.deleteRow = function (i) { this.rows.splice(i - 1, 1); return this; };
   Sheet.prototype.getRange = function (row, col, nRows, nCols) {
     var sh = this;
     return {

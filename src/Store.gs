@@ -2,10 +2,15 @@
  * Storage layer.
  *
  * Two tiers, chosen by how hot the data is:
- *   - CacheService  : rooms, per-player live state, matchmaking queue.
- *                     Sub-50ms, shared across users, evicted after 6h.
- *   - SpreadsheetApp: players, ratings, match history, leaderboard.
+ *   - CacheService  : per-player live state, the matchmaking queue, and a
+ *                     read-through copy of everything below. Sub-50ms,
+ *                     shared across users, and explicitly best-effort:
+ *                     Google may drop any entry at any moment.
+ *   - SpreadsheetApp: players, rooms, ratings, match history, leaderboard.
  *                     Slow (100-800ms) but durable, and readable by a human.
+ *
+ * Nothing that has to survive lives only in the cache. Anything the cache
+ * loses is rebuilt from the sheet on the next read.
  */
 
 var STORE = {
@@ -21,7 +26,10 @@ var STORE = {
     Matches: [
       'id', 'ts', 'mode', 'p1', 'p1name', 'p2', 'p2name',
       'score1', 'score2', 'winner', 'tr1Before', 'tr1After', 'tr2Before', 'tr2After', 'stats'
-    ]
+    ],
+    // The durable copy of every live room. One row per room, deleted when
+    // the room empties or goes stale.
+    Rooms: ['code', 'updated', 'state', 'mode', 'players', 'json']
   }
 };
 
@@ -114,6 +122,60 @@ function Store_writeRow(name, rowIndex, obj) {
   sh.getRange(rowIndex, 1, 1, headers.length).setValues([row]);
 }
 
+/**
+ * Row number of the first row whose `header` column equals `value`, or 0.
+ * Reads one column rather than the whole sheet, which matters for tables
+ * that carry a large JSON payload in another column.
+ */
+function Store_findRow(name, header, value) {
+  var sh = Store_sheet(name);
+  var last = sh.getLastRow();
+  if (last < 2) return 0;
+  var col = STORE.SHEETS[name].indexOf(header) + 1;
+  if (col < 1) throw new Error('no such column: ' + name + '.' + header);
+  var values = sh.getRange(2, col, last - 1, 1).getValues();
+  var wanted = String(value);
+  for (var i = 0; i < values.length; i++) {
+    if (String(values[i][0]) === wanted) return i + 2;
+  }
+  return 0;
+}
+
+/** Reads a single row as an object keyed by the header row. */
+function Store_readRow(name, rowIndex) {
+  var sh = Store_sheet(name);
+  if (rowIndex < 2 || rowIndex > sh.getLastRow()) return null;
+  var headers = STORE.SHEETS[name];
+  var row = sh.getRange(rowIndex, 1, 1, headers.length).getValues()[0];
+  var obj = { _row: rowIndex };
+  for (var c = 0; c < headers.length; c++) obj[headers[c]] = row[c];
+  return obj;
+}
+
+/** Two columns of a sheet, as {a, b, _row} triples. Used for cheap sweeps. */
+function Store_readPairs(name, headerA, headerB) {
+  var sh = Store_sheet(name);
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  var headers = STORE.SHEETS[name];
+  var ca = headers.indexOf(headerA) + 1;
+  var cb = headers.indexOf(headerB) + 1;
+  var lo = Math.min(ca, cb), hi = Math.max(ca, cb);
+  var values = sh.getRange(2, lo, last - 1, hi - lo + 1).getValues();
+  return values.map(function (row, i) {
+    return { a: row[ca - lo], b: row[cb - lo], _row: i + 2 };
+  });
+}
+
+/** Deletes rows by number. Sorted descending first so indexes stay valid. */
+function Store_deleteRows(name, rowIndexes) {
+  if (!rowIndexes || !rowIndexes.length) return 0;
+  var sh = Store_sheet(name);
+  var sorted = rowIndexes.slice().sort(function (a, b) { return b - a; });
+  sorted.forEach(function (r) { sh.deleteRow(r); });
+  return sorted.length;
+}
+
 /* ------------------------------------------------------------------ cache */
 
 function Store_cache() {
@@ -126,8 +188,16 @@ function Store_cacheGet(key) {
   try { return JSON.parse(raw); } catch (e) { return null; }
 }
 
+// CacheService rejects anything past 100KB. Dropping the write is always
+// better than throwing out of a call that would otherwise have succeeded:
+// everything cached here is either rebuildable or re-sent next tick.
+var STORE_CACHE_MAX_ = 96 * 1024;
+
 function Store_cachePut(key, value, ttlSeconds) {
-  Store_cache().put(key, JSON.stringify(value), ttlSeconds || 600);
+  var raw = JSON.stringify(value);
+  if (raw.length > STORE_CACHE_MAX_) return false;
+  Store_cache().put(key, raw, ttlSeconds || 600);
+  return true;
 }
 
 function Store_cacheRemove(key) {

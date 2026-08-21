@@ -33,6 +33,9 @@ var Game = (function () {
     lastTargetId: null,         // last opponent we actually hit, for the HUD
     lastSyncAt: 0,
     syncErrors: 0,
+    rejoinAt: 0,
+    rejoinTries: 0,
+    rejoining: false,
 
     // cpu
     ai: null,
@@ -296,6 +299,9 @@ var Game = (function () {
     G.engine.alive = false;              // not playing until the round starts
     G.lastSyncAt = 0;
     G.syncErrors = 0;
+    G.rejoinAt = 0;
+    G.rejoinTries = 0;
+    G.rejoining = false;
     Net.resetSyncGate();
     layoutForMode();
     run();
@@ -625,8 +631,7 @@ var Game = (function () {
     }).catch(function (err) {
       G.syncErrors++;
       if (String(err.message).indexOf('ROOM_GONE') !== -1) {
-        U.toast('방이 사라졌습니다.', 'error');
-        App.exitToMenu();
+        rejoin();
         return;
       }
       if (G.syncErrors === 6) U.toast('서버 응답이 느립니다…', 'error');
@@ -634,6 +639,40 @@ var Game = (function () {
         U.toast('서버와의 연결이 끊어졌습니다.', 'error');
         App.exitToMenu();
       }
+    });
+  }
+
+  /**
+   * The server says it has never heard of this room. Walk back in rather
+   * than ending the session: a room can read as missing for a moment while
+   * the server refills its copy of it, and rejoining also recovers a seat
+   * that was lost along the way. Only after several failed attempts is the
+   * room actually gone.
+   */
+  function rejoin() {
+    if (G.rejoining || !G.roomCode) return;
+    var now = performance.now();
+    if (now - G.rejoinAt < 1500) return;
+    G.rejoinAt = now;
+    G.rejoinTries++;
+
+    if (G.rejoinTries > 4) {
+      U.toast('방이 사라졌습니다.', 'error');
+      App.exitToMenu();
+      return;
+    }
+
+    if (G.rejoinTries === 1) U.toast('방에 다시 연결하는 중…');
+    G.rejoining = true;
+    Net.roomJoin(G.roomCode, G.spectating).then(function (data) {
+      G.rejoining = false;
+      G.rejoinTries = 0;
+      G.syncErrors = 0;
+      G.room = data.room;
+      G.spectating = data.role === 'spectator';
+      Net.resetSyncGate();
+    }).catch(function () {
+      G.rejoining = false;
     });
   }
 

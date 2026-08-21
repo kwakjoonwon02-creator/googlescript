@@ -446,6 +446,166 @@ t('solo runs record personal bests without touching TR', () => {
   eq(res.profile.totalLines, 140, 'lifetime lines accumulate');
 });
 
+section('surviving a cold cache');
+
+/* CacheService is best-effort. Everything here wipes it on purpose, because
+   that is what broke live deployments: rooms only existed in the cache, so
+   when Google dropped them every client got ROOM_GONE and was thrown out of
+   the match. */
+
+t('a match in progress survives the cache being wiped', () => {
+  const s = makeSandbox();
+  const { a, b, code } = pairUp(s);
+  sync(s, a, code, { ready: true });
+  let r = sync(s, b, code, { ready: true });
+  s.__clock.set(r.room.startAt + 10);
+  r = sync(s, a, code, { ready: true, round: 1 });
+  eq(r.room.state, 'playing', 'match under way');
+
+  assert(s.__evict() > 0, 'nothing was cached to evict');
+
+  r = sync(s, a, code, { ready: true, round: 1 });
+  eq(r.room.state, 'playing', 'the round carried on');
+  eq(r.room.code, code, 'same room');
+  eq(r.room.players.length, 2, 'both players still seated');
+  eq(r.room.seed > 0, true, 'the piece order survived');
+});
+
+t('one lost state key does not kill the player it belonged to', () => {
+  const s = makeSandbox();
+  const { a, b, code } = pairUp(s);
+  sync(s, a, code, { ready: true });
+  let r = sync(s, b, code, { ready: true });
+  s.__clock.set(r.room.startAt + 10);
+  sync(s, a, code, { ready: true, round: 1 });
+  sync(s, b, code, { ready: true, round: 1 });
+
+  assert(s.__evict('rs:' + code + ':' + b.id) === 1, 'expected one key to go');
+
+  r = sync(s, a, code, { ready: true, round: 1 });
+  eq(r.room.state, 'playing', 'Bravo was declared dead by a cache miss');
+});
+
+t('a player who really is gone is still dropped after a wipe', () => {
+  const s = makeSandbox();
+  const { a, b, code } = pairUp(s);
+  sync(s, a, code, { ready: true });
+  let r = sync(s, b, code, { ready: true });
+  s.__clock.set(r.room.startAt + 10);
+  sync(s, a, code, { ready: true, round: 1 });
+  sync(s, b, code, { ready: true, round: 1 });
+
+  s.__evict();
+  // Bravo never comes back. The grace the restore buys runs out.
+  r = sync(s, a, code, { ready: true, round: 1 });
+  eq(r.room.state, 'playing', 'not judged during the grace window');
+  s.__clock.advance(10000);
+  r = sync(s, a, code, { ready: true, round: 1 });
+  eq(r.room.state, 'roundover', 'silence should still end the round');
+  eq(r.room.roundWinner, a.id, 'the player who stayed wins');
+});
+
+t('the match still finishes and settles after a wipe', () => {
+  const s = makeSandbox();
+  const { a, b, code } = pairUp(s);
+  s.__evict();
+  const res = playMatch(s, a, b, code, 3, 1);
+  eq(res.room.state, 'matchover', 'match finished');
+  eq(res.room.matchWinner, a.id, 'right winner');
+  eq(res.room.results.ranked, true, 'settled as ranked');
+  const after = ok(s.rpc('profile', { id: a.id, token: a.token }));
+  eq(after.profile.games, 1, 'the result reached the sheet');
+});
+
+t('scores and chat come back with the room', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo');
+  const room = ok(s.rpc('roomCreate', { id: a.id, token: a.token, config: { ft: 5 } })).room;
+  ok(s.rpc('roomJoin', { id: b.id, token: b.token, code: room.code }));
+  ok(s.rpc('chatSend', { id: a.id, token: a.token, code: room.code, text: 'gl hf' }));
+
+  s.__evict();
+
+  const r = sync(s, b, room.code, {});
+  eq(r.room.config.ft, 5, 'the rules came back');
+  eq(r.chat.length, 1, 'the chat history came back');
+  eq(r.chat[0].text, 'gl hf', 'same message');
+});
+
+t('the public room list rebuilds itself', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha');
+  const room = ok(s.rpc('roomCreate', { id: a.id, token: a.token, config: { name: 'OPEN' } })).room;
+  eq(ok(s.rpc('roomList', {})).rooms.length, 1, 'listed to start with');
+
+  s.__evict();
+
+  const list = ok(s.rpc('roomList', {})).rooms;
+  eq(list.length, 1, 'still listed after the wipe');
+  eq(list[0].code, room.code, 'same room');
+  eq(list[0].name, 'OPEN', 'name preserved');
+});
+
+t('a private ranked room is never listed, wipe or no wipe', () => {
+  const s = makeSandbox();
+  const { code } = pairUp(s);
+  s.__evict();
+  const list = ok(s.rpc('roomList', {})).rooms;
+  eq(list.filter(r => r.code === code).length, 0, 'ranked rooms stay hidden');
+});
+
+t('an empty room leaves nothing behind', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha');
+  const room = ok(s.rpc('roomCreate', { id: a.id, token: a.token })).room;
+  ok(s.rpc('roomLeave', { id: a.id, token: a.token, code: room.code }));
+
+  s.__evict();
+
+  eq(s.Rooms_load(room.code), null, 'the room is gone for good');
+  eq(ok(s.rpc('roomList', {})).rooms.length, 0, 'and not listed');
+});
+
+t('a quiet room keeps its row alive so the janitor leaves it be', () => {
+  const s = makeSandbox();
+  const { a, b, code } = pairUp(s);
+  const rowOf = () => s.Store_readRow('Rooms', s.Store_findRow('Rooms', 'code', code));
+
+  // Nobody readies up for an hour and a half; they just sit there syncing.
+  for (let minutes = 5; minutes <= 90; minutes += 5) {
+    s.__clock.advance(5 * 60 * 1000);
+    sync(s, a, code, {});
+    sync(s, b, code, {});
+  }
+
+  const age = s.__clock.now() - Number(rowOf().updated);
+  assert(age < 2 * s.ROOMS.HEARTBEAT_MS, 'the row went stale: ' + Math.round(age / 1000) + 's old');
+
+  s.Rooms_sweep();
+  assert(s.Rooms_load(code), 'a room people are sitting in was swept away');
+});
+
+t('the janitor deletes rooms nobody touched for an hour', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha');
+  const live = ok(s.rpc('roomCreate', { id: a.id, token: a.token, config: { name: 'LIVE' } })).room;
+  const old = ok(s.rpc('roomCreate', { id: a.id, token: a.token, config: { name: 'OLD' } })).room;
+
+  // Age the old one past the TTL by rewriting its row in place.
+  const row = s.Store_findRow('Rooms', 'code', old.code);
+  const rec = s.Store_readRow('Rooms', row);
+  const aged = JSON.parse(rec.json);
+  aged.updated = s.__clock.now() - 2 * 3600 * 1000;
+  s.Store_writeRow('Rooms', row, Object.assign(rec, { updated: aged.updated, json: JSON.stringify(aged) }));
+
+  s.__evict();
+  s.Rooms_sweep();
+
+  assert(s.Rooms_load(live.code), 'the live room was swept away');
+  eq(s.Rooms_load(old.code), null, 'the stale room survived');
+  eq(s.Store_findRow('Rooms', 'code', old.code), 0, 'its row is still there');
+});
+
 section('spectating');
 
 t('a spectator sees every board and never affects the match', () => {
