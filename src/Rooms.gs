@@ -33,28 +33,6 @@ var ROOMS = {
   ATTACK_LOG: 24
 };
 
-/**
- * Two seams let this whole file run unchanged on the relay as well as here.
- * The relay assigns into ROOMS_OVERRIDES before it serves anything; on Apps
- * Script both stay empty and the local implementations are used. Neither
- * default is referenced until it is called, so the relay never needs the
- * files that define them.
- */
-var ROOMS_OVERRIDES = {
-  authenticate: null,   // payload -> {id, name, tr, rank, glicko, rd, vol}
-  settle: null          // settlement request -> {ranked, delta, scores}
-};
-
-function Rooms_authenticate_(payload) {
-  if (ROOMS_OVERRIDES.authenticate) return ROOMS_OVERRIDES.authenticate(payload);
-  return Players_authenticate(payload);
-}
-
-function Rooms_settle_(request) {
-  if (ROOMS_OVERRIDES.settle) return ROOMS_OVERRIDES.settle(request);
-  return Match_settle(request);
-}
-
 function Rooms_key_(code) { return 'room:' + code; }
 function Rooms_stateKey_(code, playerId) { return 'rs:' + code + ':' + playerId; }
 
@@ -175,6 +153,7 @@ function Rooms_seatFor_(player) {
     name: player.name,
     tr: Math.round(Number(player.tr)),
     rank: player.rank,
+    rankColor: Ranks_color(player.rank),
     glicko: Number(player.glicko),
     rd: Number(player.rd),
     vol: Number(player.vol),
@@ -315,42 +294,132 @@ function Rooms_creditKnockouts_(room, states, alive) {
  * Settles a finished match: writes history, and for ranked 1v1 runs the
  * Glicko-2 update. Called exactly once, inside the transition lock.
  */
-/**
- * Turns a finished match into a settlement request and hands it to whoever
- * owns the durable data. On Apps Script that is Match_settle right here; on
- * the relay it is a signed POST back to the web app, which answers with the
- * same shape.
- */
 function Rooms_finishMatch_(room, states) {
+  var summary = {
+    winner: room.matchWinner,
+    scores: {},
+    ranked: false,
+    delta: {},
+    ts: Store_now()
+  };
+  room.players.forEach(function (p) { summary.scores[p.id] = Number(p.wins || 0); });
+
   var statsFor = function (id) {
     var st = states[id] || {};
     return st.stats || {};
   };
 
-  var request = {
-    code: room.code,
-    mode: room.mode,
-    winner: room.matchWinner,
-    players: room.players.map(function (p) {
-      return { id: p.id, name: p.name, wins: Number(p.wins || 0), stats: statsFor(p.id) };
-    })
+  var isRanked = room.mode === 'ranked' && room.players.length === 2;
+  var p1seat = room.players[0];
+  var p2seat = room.players.length > 1 ? room.players[1] : null;
+
+  var rec1 = Players_get(p1seat.id);
+  var rec2 = p2seat ? Players_get(p2seat.id) : null;
+  if (!rec1 || !rec2) return summary;
+
+  var tr1Before = Number(rec1.tr);
+  var tr2Before = Number(rec2.tr);
+  var rank1Before = rec1.rank;
+  var rank2Before = rec2.rank;
+  var s1 = Number(p1seat.wins || 0);
+  var s2 = Number(p2seat.wins || 0);
+
+  if (isRanked) {
+    summary.ranked = true;
+    var rated = Glicko_rateMatch(
+      { glicko: Number(rec1.glicko), rd: Number(rec1.rd), vol: Number(rec1.vol) },
+      { glicko: Number(rec2.glicko), rd: Number(rec2.rd), vol: Number(rec2.vol) },
+      s1, s2
+    );
+    Rooms_applyRating_(rec1, rated.p1, s1 > s2, s1, s2, statsFor(rec1.id));
+    Rooms_applyRating_(rec2, rated.p2, s2 > s1, s2, s1, statsFor(rec2.id));
+    Leaderboard_invalidate();
+  } else {
+    Rooms_applyCasual_(rec1, s1 > s2, s1, s2, statsFor(rec1.id));
+    Rooms_applyCasual_(rec2, s2 > s1, s2, s1, statsFor(rec2.id));
+  }
+
+  summary.delta[rec1.id] = {
+    trBefore: Math.round(tr1Before), trAfter: Math.round(Number(rec1.tr)),
+    rankBefore: rank1Before, rank: rec1.rank, games: Number(rec1.games)
+  };
+  summary.delta[rec2.id] = {
+    trBefore: Math.round(tr2Before), trAfter: Math.round(Number(rec2.tr)),
+    rankBefore: rank2Before, rank: rec2.rank, games: Number(rec2.games)
   };
 
-  var settled = Rooms_settle_(request) || {};
-  return {
+  Store_appendRow('Matches', {
+    id: Store_uid('m_'),
+    ts: Store_now(),
+    mode: room.mode,
+    p1: rec1.id, p1name: rec1.name,
+    p2: rec2.id, p2name: rec2.name,
+    score1: s1, score2: s2,
     winner: room.matchWinner,
-    scores: settled.scores || {},
-    ranked: !!settled.ranked,
-    delta: settled.delta || {},
-    pending: !!settled.pending,
-    ts: Store_now()
+    tr1Before: Math.round(tr1Before), tr1After: Math.round(Number(rec1.tr)),
+    tr2Before: Math.round(tr2Before), tr2After: Math.round(Number(rec2.tr)),
+    stats: JSON.stringify({ p1: statsFor(rec1.id), p2: statsFor(rec2.id) })
+  });
+
+  return summary;
+}
+
+/** Rolling average of the player's performance stats over their career. */
+function Rooms_blendStats_(record, stats) {
+  var n = Number(record.games) || 0;
+  var blend = function (oldValue, sample) {
+    var prev = Number(oldValue) || 0;
+    var next = Number(sample);
+    if (!isFinite(next) || next <= 0) return prev;
+    if (n === 0) return next;
+    // Weight recent games a little more heavily than a pure mean would.
+    var w = Math.min(0.25, 1 / (n + 1) + 0.05);
+    return prev * (1 - w) + next * w;
   };
+  record.apm = Math.round(blend(record.apm, stats.apm) * 100) / 100;
+  record.pps = Math.round(blend(record.pps, stats.pps) * 100) / 100;
+  record.vs = Math.round(blend(record.vs, stats.vs) * 100) / 100;
+  record.totalLines = (Number(record.totalLines) || 0) + (Number(stats.lines) || 0);
+  record.totalPieces = (Number(record.totalPieces) || 0) + (Number(stats.pieces) || 0);
+}
+
+function Rooms_applyRating_(record, rated, won, myRounds, theirRounds, stats) {
+  Rooms_blendStats_(record, stats);
+
+  record.glicko = rated.glicko;
+  record.rd = rated.rd;
+  record.vol = rated.vol;
+  record.tr = Glicko_toTR(rated.glicko, rated.rd);
+  record.games = (Number(record.games) || 0) + 1;
+  record.wins = (Number(record.wins) || 0) + (won ? 1 : 0);
+  record.losses = (Number(record.losses) || 0) + (won ? 0 : 1);
+  record.roundsWon = (Number(record.roundsWon) || 0) + Number(myRounds || 0);
+  record.roundsLost = (Number(record.roundsLost) || 0) + Number(theirRounds || 0);
+
+  var streak = Number(record.streak) || 0;
+  record.streak = won ? (streak >= 0 ? streak + 1 : 1) : (streak <= 0 ? streak - 1 : -1);
+  record.bestStreak = Math.max(Number(record.bestStreak) || 0, record.streak);
+
+  if (Number(record.tr) > (Number(record.peakTr) || 0)) record.peakTr = Number(record.tr);
+  record.rank = Ranks_resolve(Number(record.tr), Number(record.games));
+  if (Ranks_index(record.rank) > Ranks_index(record.bestRank)) record.bestRank = record.rank;
+  record.lastSeen = Store_now();
+
+  Players_save(record);
+}
+
+function Rooms_applyCasual_(record, won, myRounds, theirRounds, stats) {
+  Rooms_blendStats_(record, stats);
+  record.roundsWon = (Number(record.roundsWon) || 0) + Number(myRounds || 0);
+  record.roundsLost = (Number(record.roundsLost) || 0) + Number(theirRounds || 0);
+  record.lastSeen = Store_now();
+  Players_save(record);
 }
 
 /* --------------------------------------------------------------- endpoints */
 
 function Api_roomCreate(payload) {
-  var player = Rooms_authenticate_(payload);
+  var player = Players_authenticate(payload);
   var room = Rooms_create(player, payload.config || {}, 'casual');
   return { room: Rooms_publicView_(room) };
 }
@@ -364,7 +433,7 @@ function Api_roomCreate(payload) {
  * people expect from a shared room code.
  */
 function Api_roomJoin(payload) {
-  var player = Rooms_authenticate_(payload);
+  var player = Players_authenticate(payload);
   var code = String(payload.code || '').toUpperCase().trim();
   var wantSpectate = !!payload.spectate;
 
@@ -424,7 +493,7 @@ function Api_roomJoin(payload) {
 }
 
 function Api_roomLeave(payload) {
-  var player = Rooms_authenticate_(payload);
+  var player = Players_authenticate(payload);
   var code = String(payload.code || '').toUpperCase().trim();
 
   Store_withLock(5000, function () {
@@ -465,7 +534,7 @@ function Api_roomLeave(payload) {
 }
 
 function Api_roomConfig(payload) {
-  var player = Rooms_authenticate_(payload);
+  var player = Players_authenticate(payload);
   var code = String(payload.code || '').toUpperCase().trim();
   var result = Store_withLock(5000, function () {
     var room = Rooms_load(code);
@@ -496,10 +565,9 @@ function Api_roomList(payload) {
  *   - returns the room plus every other player's latest state
  */
 function Api_sync(payload) {
-  // Through the seam like every other endpoint: this used to accept any
-  // non-empty token, which let anyone who knew a player id publish state as
-  // them. On the relay it resolves to the socket's verified ticket.
-  var id = Rooms_authenticate_(payload).id;
+  // Full authentication, not merely "a token was supplied": without the
+  // check anyone who knew a player id could publish board state as them.
+  var id = Players_authenticate(payload).id;
   var code = String(payload.code || '').toUpperCase().trim();
 
   var room = Rooms_load(code);
@@ -558,6 +626,7 @@ function Api_sync(payload) {
       id: p.id,
       name: p.name,
       rank: p.rank,
+      rankColor: p.rankColor,
       tr: p.tr,
       wins: Number(p.wins || 0),
       ko: Number(p.ko || 0),
@@ -606,7 +675,7 @@ function Rooms_chatSince_(room, since) {
 
 /** Posts a message to the room. Rate limited per player. */
 function Api_chatSend(payload) {
-  var player = Rooms_authenticate_(payload);
+  var player = Players_authenticate(payload);
   var code = String(payload.code || '').toUpperCase().trim();
   // Collapse whitespace and drop control characters before anything stores it.
   var text = String(payload.text || '')
@@ -696,7 +765,7 @@ function Rooms_publicView_(room) {
     players: room.players.map(function (p) {
       return {
         id: p.id, name: p.name, tr: p.tr, rank: p.rank,
-        wins: Number(p.wins || 0), ko: Number(p.ko || 0)
+        rankColor: p.rankColor, wins: Number(p.wins || 0), ko: Number(p.ko || 0)
       };
     }),
     spectators: (room.spectators || []).map(function (v) {

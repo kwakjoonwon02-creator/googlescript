@@ -122,7 +122,7 @@ function MM_enterAndResolve_(player, now) {
 }
 
 function Api_queueJoin(payload) {
-  var player = Rooms_authenticate_(payload);
+  var player = Players_authenticate(payload);
   var now = Store_now();
   var result = MM_enterAndResolve_(player, now);
   if (!result.ran) throw new Error('매치메이킹 서버가 혼잡합니다. 다시 시도해 주세요.');
@@ -130,7 +130,7 @@ function Api_queueJoin(payload) {
 }
 
 function Api_queuePoll(payload) {
-  var player = Rooms_authenticate_(payload);
+  var player = Players_authenticate(payload);
   var now = Store_now();
   var result = MM_enterAndResolve_(player, now);
   if (!result.ran) return { matched: false, busy: true, waiting: 0 };
@@ -149,7 +149,7 @@ function MM_response_(value, playerId, now) {
 }
 
 function Api_queueLeave(payload) {
-  var player = Rooms_authenticate_(payload);
+  var player = Players_authenticate(payload);
   Store_withLock(6000, function () {
     var queue = MM_read_().filter(function (e) { return String(e.id) !== String(player.id); });
     MM_write_(queue);

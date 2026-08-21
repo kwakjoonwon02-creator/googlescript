@@ -58,6 +58,17 @@ t('a bad token is rejected', () => {
   assert(/token/i.test(res.error), 'unexpected error: ' + res.error);
 });
 
+t('sync will not publish state under somebody else\'s id', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo');
+  ok(s.rpc('queueJoin', { id: a.id, token: a.token }));
+  const code = ok(s.rpc('queueJoin', { id: b.id, token: b.token })).room.code;
+  // Knowing a player id is not enough: the token has to match the account.
+  const res = s.rpc('sync', { id: a.id, token: 'forged', code, state: baseState() });
+  eq(res.ok, false, 'should reject');
+  assert(/token/i.test(res.error), 'unexpected error: ' + res.error);
+});
+
 t('invalid and duplicate names are rejected', () => {
   const s = makeSandbox();
   const a = newPlayer(s, 'Alpha');
@@ -665,154 +676,6 @@ t('topping yourself out is nobody\'s knockout', () => {
   r = sync(s, b, code, { ready: true, round: 1, alive: false, killer: b.id });
   eq(r.room.players.filter(p => p.id === a.id)[0].ko, 0, 'no credit for a self-inflicted top-out');
   eq(r.room.players.filter(p => p.id === b.id)[0].ko, 0, 'and none for the victim either');
-});
-
-section('relay bridge');
-
-const crypto = require('crypto');
-const { verify: verifyTicket } = require('../relay/lib/ticket');
-
-const RELAY_SECRET = 'a-shared-secret-at-least-16';
-
-function withRelay(s) {
-  const props = s.PropertiesService.getScriptProperties();
-  props.setProperty('RELAY_SECRET', RELAY_SECRET);
-  props.setProperty('RELAY_URL', 'wss://relay.example/ws');
-  return s;
-}
-
-function nodeSign(payloadJson, secret) {
-  return crypto.createHmac('sha256', secret).update(payloadJson).digest('base64url');
-}
-
-function postSettle(s, request, secret) {
-  const payloadJson = JSON.stringify(request);
-  const body = JSON.stringify({
-    op: 'settle',
-    payloadJson: payloadJson,
-    sig: nodeSign(payloadJson, secret === undefined ? RELAY_SECRET : secret)
-  });
-  return JSON.parse(s.doPost({ postData: { contents: body } }).getContent());
-}
-
-t('the relay stays off until it is configured', () => {
-  const s = makeSandbox();
-  const a = newPlayer(s, 'Alpha');
-  const boot = ok(s.rpc('bootstrap', { id: a.id, token: a.token }));
-  eq(boot.relay, null, 'no relay config is advertised');
-  eq(s.Relay_enabled(), false, 'relay reports disabled');
-});
-
-t('a ticket minted here verifies in the relay', () => {
-  const s = withRelay(makeSandbox());
-  const a = newPlayer(s, 'Alpha');
-  const boot = ok(s.rpc('bootstrap', { id: a.id, token: a.token }));
-  assert(boot.relay, 'bootstrap should advertise the relay');
-  eq(boot.relay.url, 'wss://relay.example/ws', 'relay url');
-
-  // This is the contract that matters: two runtimes, one HMAC.
-  const result = verifyTicket(boot.relay.ticket, RELAY_SECRET);
-  assert(result.ok, 'relay rejected our ticket: ' + result.error);
-  eq(result.player.id, a.id, 'player id');
-  eq(result.player.name, 'Alpha', 'name');
-  eq(result.player.glicko, 1500, 'rating fields ride along so the relay needs no lookup');
-  assert(result.player.exp > Date.now(), 'ticket should be in date');
-});
-
-t('a ticket does not verify under a different secret', () => {
-  const s = withRelay(makeSandbox());
-  const a = newPlayer(s, 'Alpha');
-  const boot = ok(s.rpc('bootstrap', { id: a.id, token: a.token }));
-  const result = verifyTicket(boot.relay.ticket, 'some-other-secret');
-  eq(result.ok, false, 'must not verify');
-});
-
-t('a signed settlement from the relay updates ratings and history', () => {
-  const s = withRelay(makeSandbox());
-  const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo');
-
-  const res = postSettle(s, {
-    code: 'AB12C',
-    mode: 'ranked',
-    winner: a.id,
-    players: [
-      { id: a.id, name: 'Alpha', wins: 3, stats: { apm: 60, pps: 2.1, vs: 90, lines: 40, pieces: 120 } },
-      { id: b.id, name: 'Bravo', wins: 1, stats: { apm: 40, pps: 1.8, vs: 70, lines: 30, pieces: 100 } }
-    ]
-  });
-
-  eq(res.ok, true, 'settlement accepted: ' + res.error);
-  eq(res.data.ranked, true, 'reported as ranked');
-  assert(res.data.delta[a.id].trAfter > res.data.delta[a.id].trBefore, 'winner gained TR');
-  assert(res.data.delta[b.id].trAfter < res.data.delta[b.id].trBefore, 'loser lost TR');
-
-  const winner = ok(s.rpc('profile', { id: a.id, token: a.token })).profile;
-  eq(winner.games, 1, 'game recorded');
-  eq(winner.wins, 1, 'win recorded');
-  eq(winner.roundsWon, 3, 'rounds recorded');
-  assert(winner.apm > 0, 'career stats blended');
-  eq(ok(s.rpc('profile', { id: a.id, token: a.token })).history.length, 1, 'history row written');
-});
-
-t('an unsigned or wrongly signed settlement is refused', () => {
-  const s = withRelay(makeSandbox());
-  const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo');
-  const request = {
-    code: 'AB12C', mode: 'ranked', winner: a.id,
-    players: [{ id: a.id, wins: 3, stats: {} }, { id: b.id, wins: 0, stats: {} }]
-  };
-
-  const forged = postSettle(s, request, 'not-the-secret');
-  eq(forged.ok, false, 'a forged signature must be refused');
-  assert(/signature/.test(forged.error), 'unexpected error: ' + forged.error);
-
-  const unsigned = JSON.parse(s.doPost({
-    postData: { contents: JSON.stringify({ op: 'settle', payloadJson: JSON.stringify(request) }) }
-  }).getContent());
-  eq(unsigned.ok, false, 'a missing signature must be refused');
-
-  eq(ok(s.rpc('profile', { id: a.id, token: a.token })).profile.games, 0, 'nothing was written');
-});
-
-t('the signature covers the exact bytes, not a re-serialisation', () => {
-  const s = withRelay(makeSandbox());
-  const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo');
-  const request = {
-    code: 'AB12C', mode: 'ranked', winner: a.id,
-    players: [{ id: a.id, wins: 3, stats: {} }, { id: b.id, wins: 0, stats: {} }]
-  };
-  const payloadJson = JSON.stringify(request);
-  const sig = nodeSign(payloadJson, RELAY_SECRET);
-
-  // Same object, different key order: the signature must not still pass.
-  const reordered = JSON.stringify({
-    players: request.players, winner: request.winner,
-    mode: request.mode, code: request.code
-  });
-  const res = JSON.parse(s.doPost({
-    postData: { contents: JSON.stringify({ op: 'settle', payloadJson: reordered, sig: sig }) }
-  }).getContent());
-  eq(res.ok, false, 'a re-ordered payload must not verify against the original signature');
-});
-
-t('doPost refuses anything that is not a settlement', () => {
-  const s = withRelay(makeSandbox());
-  const res = JSON.parse(s.doPost({
-    postData: { contents: JSON.stringify({ op: 'drop-database' }) }
-  }).getContent());
-  eq(res.ok, false, 'unknown ops are refused');
-  const junk = JSON.parse(s.doPost({ postData: { contents: 'not json' } }).getContent());
-  eq(junk.ok, false, 'malformed bodies are refused');
-});
-
-t('setupRelay generates a secret and reports the wiring', () => {
-  const s = makeSandbox();
-  const out = s.setupRelay('wss://relay.example/ws');
-  assert(out.secret.length >= 32, 'a usable secret was generated');
-  eq(out.url, 'wss://relay.example/ws', 'url stored');
-  eq(s.Relay_enabled(), true, 'relay is now on');
-  s.disableRelay();
-  eq(s.Relay_enabled(), false, 'and can be turned back off');
 });
 
 process.exit(finish() ? 0 : 1);

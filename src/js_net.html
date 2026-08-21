@@ -12,187 +12,11 @@ var Net = (function () {
   var serverOffset = 0;        // serverTime - Date.now(), for the countdown
   var lastLatency = 0;
 
-  /**
-   * Methods the realtime relay answers when one is configured. Everything
-   * else — accounts, ratings, the ladder — always goes to Apps Script, which
-   * owns the spreadsheet.
-   */
-  var RELAY_METHODS = {
-    queueJoin: 1, queuePoll: 1, queueLeave: 1,
-    roomCreate: 1, roomJoin: 1, roomLeave: 1, roomConfig: 1, roomList: 1,
-    chatSend: 1, sync: 1
-  };
-
-  var CONNECT_TIMEOUT_MS = 5000;
-  var CALL_TIMEOUT_MS = 9000;
-  var MAX_RECONNECTS = 6;
-  var RESUME_WAIT_MS = 4000;
-
-  /**
-   * off          no relay configured, or the first connection never came up
-   * connecting   opening the socket for the first time
-   * on           connected; relay methods go over the socket
-   * reconnecting dropped after having worked; calls wait rather than falling
-   *              back, because the rooms live on the relay and Apps Script
-   *              has never heard of them
-   */
-  var relay = {
-    mode: 'off',
-    url: null,
-    ticket: null,
-    ws: null,
-    seq: 0,
-    waiting: {},
-    attempts: 0,
-    resumeQueue: []
-  };
-
   function available() {
     return typeof google !== 'undefined' && google.script && google.script.run;
   }
 
-  /* ---------------------------------------------------------- relay link */
-
-  function relayReady() { return relay.mode === 'on'; }
-  function relayActive() { return relay.mode === 'on' || relay.mode === 'reconnecting'; }
-
-  function relaySend(method, payload) {
-    return new Promise(function (resolve, reject) {
-      var id = ++relay.seq;
-      relay.waiting[id] = { resolve: resolve, reject: reject };
-      var timer = setTimeout(function () {
-        if (relay.waiting[id]) {
-          delete relay.waiting[id];
-          reject(new Error('릴레이 응답이 없습니다.'));
-        }
-      }, CALL_TIMEOUT_MS);
-      relay.waiting[id].timer = timer;
-      try {
-        relay.ws.send(JSON.stringify({ i: id, m: method, p: payload || {} }));
-      } catch (err) {
-        clearTimeout(timer);
-        delete relay.waiting[id];
-        reject(err);
-      }
-    });
-  }
-
-  /** Holds a call while the socket comes back, instead of failing outright. */
-  function relayCall(method, payload) {
-    if (relayReady()) return relaySend(method, payload);
-    return new Promise(function (resolve, reject) {
-      var entry = {
-        resolve: resolve, reject: reject, method: method, payload: payload,
-        expires: Date.now() + RESUME_WAIT_MS
-      };
-      relay.resumeQueue.push(entry);
-    });
-  }
-
-  function flushResumeQueue(failure) {
-    var pending = relay.resumeQueue;
-    relay.resumeQueue = [];
-    pending.forEach(function (entry) {
-      if (failure) { entry.reject(failure); return; }
-      if (Date.now() > entry.expires) {
-        entry.reject(new Error('릴레이 재연결에 실패했습니다.'));
-        return;
-      }
-      relaySend(entry.method, entry.payload).then(entry.resolve, entry.reject);
-    });
-  }
-
-  function rejectInFlight(reason) {
-    Object.keys(relay.waiting).forEach(function (id) {
-      var entry = relay.waiting[id];
-      delete relay.waiting[id];
-      clearTimeout(entry.timer);
-      entry.reject(new Error(reason));
-    });
-  }
-
-  function openRelay() {
-    return new Promise(function (settle) {
-      var socket;
-      try {
-        socket = new WebSocket(relay.url);
-      } catch (err) {
-        settle(false);
-        return;
-      }
-      relay.ws = socket;
-      var done = false;
-      var finish = function (ok) { if (!done) { done = true; settle(ok); } };
-      var timer = setTimeout(function () { finish(false); try { socket.close(); } catch (e) {} },
-                             CONNECT_TIMEOUT_MS);
-
-      socket.onopen = function () {
-        var id = ++relay.seq;
-        relay.waiting[id] = {
-          resolve: function () {
-            clearTimeout(timer);
-            relay.mode = 'on';
-            relay.attempts = 0;
-            finish(true);
-            flushResumeQueue(null);
-          },
-          reject: function (err) {
-            clearTimeout(timer);
-            console.warn('relay refused the ticket: ' + err.message);
-            finish(false);
-          }
-        };
-        socket.send(JSON.stringify({ i: id, m: 'hello', p: { ticket: relay.ticket } }));
-      };
-
-      socket.onmessage = function (event) {
-        var msg;
-        try { msg = JSON.parse(event.data); } catch (e) { return; }
-        var entry = relay.waiting[msg.i];
-        if (!entry) return;
-        delete relay.waiting[msg.i];
-        clearTimeout(entry.timer);
-        if (msg.t) serverOffset = msg.t - Date.now();
-        if (msg.ok) entry.resolve(msg.d);
-        else entry.reject(new Error(msg.e || '릴레이 오류'));
-      };
-
-      socket.onclose = function () {
-        clearTimeout(timer);
-        rejectInFlight('릴레이 연결이 끊어졌습니다.');
-        if (relay.mode === 'on' || relay.mode === 'reconnecting') {
-          relay.mode = 'reconnecting';
-          scheduleReconnect();
-        }
-        finish(false);
-      };
-
-      socket.onerror = function () { /* onclose always follows */ };
-    });
-  }
-
-  function scheduleReconnect() {
-    if (relay.attempts >= MAX_RECONNECTS) {
-      relay.mode = 'off';
-      flushResumeQueue(new Error('릴레이에 다시 연결하지 못했습니다.'));
-      return;
-    }
-    var wait = Math.min(8000, 400 * Math.pow(2, relay.attempts));
-    relay.attempts++;
-    setTimeout(function () {
-      if (relay.mode !== 'reconnecting') return;
-      openRelay();
-    }, wait);
-  }
-
-  /* --------------------------------------------------------------- calls */
-
   function call(method, payload) {
-    if (relayActive() && RELAY_METHODS[method]) return relayCall(method, payload);
-    return appsScriptCall(method, payload);
-  }
-
-  function appsScriptCall(method, payload) {
     return new Promise(function (resolve, reject) {
       if (!available()) {
         reject(new Error('Apps Script 런타임에 연결할 수 없습니다. 웹앱 URL로 접속했는지 확인하세요.'));
@@ -231,7 +55,7 @@ var Net = (function () {
   }
 
   function bootstrap(name) {
-    return appsScriptCall('bootstrap', {
+    return call('bootstrap', {
       id: creds && creds.id,
       token: creds && creds.token,
       name: name
@@ -245,21 +69,6 @@ var Net = (function () {
       window.RANK_COLORS[data.ranks.unranked.name] = data.ranks.unranked.color;
       window.RANK_TABLE = data.ranks;
       window.RULE_SCHEMA = data.rules || {};
-
-      // A configured relay is tried once. If it does not come up we stay on
-      // Apps Script polling rather than leaving the player stranded.
-      if (data.relay && data.relay.url && data.relay.ticket && typeof WebSocket !== 'undefined') {
-        relay.url = data.relay.url;
-        relay.ticket = data.relay.ticket;
-        relay.mode = 'connecting';
-        return openRelay().then(function (ok) {
-          if (!ok) {
-            relay.mode = 'off';
-            console.warn('relay unavailable; using Apps Script polling');
-          }
-          return data;
-        });
-      }
       return data;
     });
   }
@@ -287,10 +96,6 @@ var Net = (function () {
   return {
     available: available,
     call: call,
-    isRelay: relayReady,
-    relayMode: function () { return relay.mode; },
-    /** Closes the socket so reconnect behaviour can be exercised. */
-    __testCloseRelay: function () { if (relay.ws) relay.ws.close(); },
     callRetry: callRetry,
     authed: authed,
     bootstrap: bootstrap,

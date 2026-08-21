@@ -10,11 +10,8 @@ const SRC = path.join(__dirname, '..', '..', 'src');
 /** Server files, in the order Apps Script would evaluate them. */
 const SERVER_FILES = [
   'Store.gs', 'Glicko.gs', 'Ranks.gs', 'Players.gs',
-  'Leaderboard.gs', 'Match.gs', 'Rooms.gs', 'Matchmaking.gs', 'Relay.gs', 'Code.gs'
+  'Leaderboard.gs', 'Rooms.gs', 'Matchmaking.gs', 'Code.gs'
 ];
-
-/** The subset the relay runs: the realtime layer and nothing else. */
-const RELAY_FILES = ['Rooms.gs', 'Matchmaking.gs'];
 
 /** Client files, in the order index.html includes them. */
 const CLIENT_FILES = [
@@ -41,4 +38,4 @@ function serverSource() {
   return SERVER_FILES.map(read).join('\n');
 }
 
-module.exports = { SRC, SERVER_FILES, RELAY_FILES, CLIENT_FILES, read, scriptOf, serverSource };
+module.exports = { SRC, SERVER_FILES, CLIENT_FILES, read, scriptOf, serverSource };

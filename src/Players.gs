@@ -160,7 +160,6 @@ function Api_bootstrap(payload) {
     profile: Players_publicView(player),
     ranks: Ranks_clientTable(),
     rules: Rooms_ruleSchema(),
-    relay: Relay_clientConfig(player),
     server: { time: Store_now(), version: APP.version, name: APP.name },
     isNew: Number(player.games) === 0 && Number(player.totalPieces) === 0
   };

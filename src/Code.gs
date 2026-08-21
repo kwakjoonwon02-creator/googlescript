@@ -26,26 +26,6 @@ function doGet(e) {
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
-/**
- * Server-to-server entry point, used only by the realtime relay to report a
- * finished match. Every request is HMAC signed with the shared secret, so an
- * anonymous deployment is still safe to leave open.
- */
-function doPost(e) {
-  var reply = function (payload) {
-    return ContentService.createTextOutput(JSON.stringify(payload))
-      .setMimeType(ContentService.MimeType.JSON);
-  };
-  try {
-    var message = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-    if (message.op !== 'settle') throw new Error('unknown op: ' + message.op);
-    return reply({ ok: true, data: Relay_handleSettle(message), t: Date.now() });
-  } catch (err) {
-    console.error('doPost failed: ' + (err && err.stack || err));
-    return reply({ ok: false, error: String((err && err.message) || err) });
-  }
-}
-
 /** Used by index.html to inline the other client files. */
 function include(name) {
   return HtmlService.createHtmlOutputFromFile(name).getContent();

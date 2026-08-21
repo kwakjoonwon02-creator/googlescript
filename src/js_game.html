@@ -7,13 +7,8 @@
 
 var Game = (function () {
 
-  /* Poll rates. Over Apps Script a round trip costs 150-500ms, so asking
-     more often just queues requests. Over the relay it costs a few, and the
-     interval is what caps how fresh the opponent's board is. */
-  var SYNC_INTERVAL = 320;
+  var SYNC_INTERVAL = 320;      // ms between sync() calls while in a room
   var LOBBY_SYNC_INTERVAL = 900;
-  var RELAY_SYNC_INTERVAL = 60;
-  var RELAY_LOBBY_INTERVAL = 400;
 
   var G = {
     mode: null,
@@ -585,10 +580,7 @@ var Game = (function () {
   function lowestBy(ids, score) { return pickExtreme_(ids, score, false); }
 
   function maybeSync(now) {
-    var live = Net.isRelay();
-    var interval = G.phase === 'playing'
-      ? (live ? RELAY_SYNC_INTERVAL : SYNC_INTERVAL)
-      : (live ? RELAY_LOBBY_INTERVAL : LOBBY_SYNC_INTERVAL);
+    var interval = G.phase === 'playing' ? SYNC_INTERVAL : LOBBY_SYNC_INTERVAL;
     if (now - G.lastSyncAt < interval) return;
     G.lastSyncAt = now;
 
@@ -783,12 +775,6 @@ var Game = (function () {
         G.phase = 'matchover';
         // Drop readiness so the rematch only starts when both players opt in.
         G.ready = false;
-        showVersusResult(room);
-      } else if (App.currentScreen() === 'result' &&
-                 room.results && !room.results.pending &&
-                 prev && prev.results && prev.results.pending) {
-        // The relay settles ratings over HTTPS after the match ends, so the
-        // real TR figures land a moment after the result screen does.
         showVersusResult(room);
       }
       return;
