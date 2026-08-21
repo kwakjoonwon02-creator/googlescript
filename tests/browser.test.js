@@ -683,6 +683,143 @@ const { testAsync: t, assert, eq, section, note, finish } = require('./lib/repor
     await page.waitForSelector('#screen-menu.active', { timeout: 8000 });
   });
 
+  section('tablets and the software keyboard');
+
+  /* iOS does not shrink the layout viewport when the keyboard opens: it
+     leaves the page full height, covers the bottom with the keyboard and
+     scrolls the document. Playwright cannot raise an iPad keyboard, so these
+     drive U.applyViewport with the numbers iOS would report. What is not
+     covered here is the reading of window.visualViewport itself. */
+
+  await t('every text field is big enough that iOS will not zoom the page', async () => {
+    const small = await page.evaluate(() => {
+      const bad = [];
+      for (const screen of document.querySelectorAll('.screen')) {
+        screen.classList.add('active');
+        for (const f of screen.querySelectorAll('input, textarea, select')) {
+          const size = parseFloat(getComputedStyle(f).fontSize);
+          if (size < 16) bad.push((f.id || f.className) + ' @ ' + size + 'px');
+        }
+        screen.classList.remove('active');
+      }
+      document.querySelector('#screen-menu').classList.add('active');
+      return bad;
+    });
+    // Safari zooms in on focus when a field is under 16px, and never zooms
+    // back out — the page is left cropped for the rest of the session.
+    assert(small.length === 0, small.join(', '));
+  });
+
+  await t('the app is sized from the visible area, not the window', async () => {
+    const box = await page.evaluate(() => {
+      U.applyViewport(370, 0);
+      const root = getComputedStyle(document.documentElement);
+      return {
+        app: Math.round(document.querySelector('#app').getBoundingClientRect().height),
+        appH: root.getPropertyValue('--app-h').trim(),
+        kb: root.getPropertyValue('--kb-h').trim(),
+        window: window.innerHeight,
+        klass: document.body.classList.contains('keyboard-open')
+      };
+    });
+    eq(box.app, 370, 'the app still filled the window');
+    eq(box.appH, '370px', '--app-h');
+    eq(box.kb, (box.window - 370) + 'px', '--kb-h should be what the keyboard covers');
+    eq(box.klass, true, 'keyboard-open was not set');
+  });
+
+  await t('nothing on the sign-in card is left out of reach', async () => {
+    const reach = await page.evaluate(() => {
+      document.querySelector('#screen-menu').classList.remove('active');
+      const screen = document.querySelector('#screen-auth');
+      screen.classList.add('active');
+      U.applyViewport(370, 0);
+      // Both halves matter: an overflow:hidden box still answers scrollTop,
+      // so content that fits nowhere would look reachable to a script and be
+      // stuck for a person.
+      const overflows = screen.scrollHeight > screen.clientHeight + 1;
+      const scrolls = /auto|scroll/.test(getComputedStyle(screen).overflowY);
+      const scrollable = overflows && scrolls;
+      screen.scrollTop = screen.scrollHeight;
+      const guest = document.querySelector('#auth-guest').getBoundingClientRect();
+      const reached = guest.bottom <= 370 + 1 && guest.top >= -1;
+      screen.scrollTop = 0;
+      screen.classList.remove('active');
+      document.querySelector('#screen-menu').classList.add('active');
+      return { scrollable, reached };
+    });
+    eq(reach.scrollable, true, 'the screen cropped its content instead of scrolling');
+    eq(reach.reached, true, 'the guest button could not be scrolled to');
+  });
+
+  await t('a toast is not posted behind the keyboard', async () => {
+    const box = await page.evaluate(() => {
+      U.applyViewport(370, 0);
+      const host = document.querySelector('#toast-host');
+      return {
+        gap: window.innerHeight - host.getBoundingClientRect().bottom,
+        covered: window.innerHeight - 370
+      };
+    });
+    assert(box.gap >= box.covered,
+      'a toast sits ' + box.gap + 'px off the bottom with ' + box.covered + 'px of keyboard under it');
+  });
+
+  await t('a dialog too tall for the visible area starts at its top', async () => {
+    const box = await page.evaluate(() => {
+      U.applyViewport(760, 0);
+      document.querySelector('#btn-config').click();
+      document.querySelector('#btn-password').click();
+      U.applyViewport(300, 0);
+      const host = document.querySelector('#modal-host');
+      const dialog = document.querySelector('#modal-body');
+      const h = host.getBoundingClientRect(), d = dialog.getBoundingClientRect();
+      return {
+        hostHeight: Math.round(h.height),
+        cut: d.top < h.top - 1,
+        scrollable: host.scrollHeight > host.clientHeight + 1
+      };
+    });
+    eq(box.hostHeight, 300, 'the overlay ignored the visible area');
+    eq(box.cut, false, 'the top of the dialog was pushed out of the overlay');
+    eq(box.scrollable, true, 'the overlay cropped the dialog instead of scrolling');
+    await page.evaluate(() => { U.closeModal(); App.showScreen('menu'); });
+  });
+
+  await t('the board is scaled down to fit, never cropped', async () => {
+    await page.evaluate(() => U.applyViewport(window.innerHeight, 0));
+    await page.click('[data-nav="cpu"]');
+    await page.waitForSelector('#modal-host.open', { timeout: 8000 });
+    const levels = await page.$$('#modal-body .menu-item');
+    await levels[0].click();
+    await page.waitForFunction(
+      () => document.querySelector('#s-time').textContent !== '0:00', null, { timeout: 25000 });
+
+    const sizes = [[1440, 900], [1024, 768], [1024, 600], [900, 560]];
+    const results = [];
+    for (const [w, h] of sizes) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.waitForTimeout(220);
+      results.push(await page.evaluate(() => {
+        const col = document.querySelector('.match-column');
+        const r = col.getBoundingClientRect();
+        return {
+          size: innerWidth + 'x' + innerHeight,
+          scale: +getComputedStyle(col).transform.split('(')[1].split(',')[0] || 1,
+          inside: r.top >= -1 && r.bottom <= innerHeight + 1 &&
+                  r.left >= -1 && r.right <= innerWidth + 1
+        };
+      }));
+    }
+    note(results.map(r => r.size + ' @ ' + r.scale.toFixed(2)).join('  '));
+    results.forEach(r => assert(r.inside, 'the matrix is cropped at ' + r.size));
+    assert(results[results.length - 1].scale < 0.95, 'a short window did not scale the board down');
+
+    await page.keyboard.press('Escape');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForSelector('#screen-menu.active', { timeout: 8000 });
+  });
+
   section('error budget');
   await t('no uncaught errors across the whole session', async () => {
     const errs = await page.evaluate(() => window.__errors);

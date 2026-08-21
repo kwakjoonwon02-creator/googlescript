@@ -59,6 +59,8 @@ var App = (function () {
     var previous = current;
     current = name;
     document.body.classList.toggle('in-game', name === 'game');
+    // The board only has a measurable size once its screen is displayed.
+    if (name === 'game') U.fitStage();
     // The wipe reads as a transition, not a flash, so it only runs when the
     // screen actually changed and never on the very first paint.
     if (changed && previous !== 'boot' && CONFIG.transitions) U.replay(U.$('#wipe'), 'run');
@@ -1089,6 +1091,7 @@ var App = (function () {
   /* --------------------------------------------------------------- init */
 
   function init() {
+    U.watchViewport();
     wireAuth();
     wireMenu();
     wireMulti();

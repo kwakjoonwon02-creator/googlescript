@@ -22,7 +22,13 @@ function doGet(e) {
   t.appInfoJson = JSON.stringify({ name: APP.name, version: APP.version });
   return t.evaluate()
     .setTitle(APP.name)
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1, user-scalable=no')
+    // viewport-fit=cover so the safe-area insets the stylesheet reads are
+    // non-zero on a device with rounded corners; interactive-widget asks the
+    // browser to shrink the layout viewport when the software keyboard opens
+    // (Chromium honours it, Safari does not — U.watchViewport covers Safari).
+    .addMetaTag('viewport',
+      'width=device-width, initial-scale=1, user-scalable=no, ' +
+      'viewport-fit=cover, interactive-widget=resizes-content')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 

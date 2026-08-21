@@ -155,15 +155,38 @@ body.in-game .bg-glow { opacity: 0.35; animation: none; }
 
 /* -------------------------------------------------------------- structure */
 
-#app { position: relative; z-index: 1; height: 100%; display: flex; flex-direction: column; }
+/* --app-h is the *visible* height, which is not the window height while a
+   software keyboard is up (see U.watchViewport). It falls back to 100% until
+   the script has measured, so the first paint is right either way. */
+#app {
+  position: relative; z-index: 1;
+  height: var(--app-h, 100%);
+  display: flex; flex-direction: column;
+}
 
 .screen {
   position: absolute; inset: 0;
   display: none;
   flex-direction: column;
-  padding: 30px 40px;
+  /* Physical edges on a device with rounded corners or a home indicator. */
+  padding: max(30px, env(safe-area-inset-top)) max(40px, env(safe-area-inset-right))
+           max(30px, env(safe-area-inset-bottom)) max(40px, env(safe-area-inset-left));
+  /* When the visible area is shorter than the content — a keyboard is up, or
+     the window is simply small — the screen scrolls instead of cropping. The
+     children use `margin: auto` rather than `justify-content: center`, which
+     would push the top of an oversized child out of reach. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 .screen.active { display: flex; }
+/* The board is scaled to fit rather than scrolled; see U.fitStage. */
+#screen-game { overflow: hidden; }
+
+/* Vertical room is scarce exactly when a keyboard is up, and the margins are
+   the cheapest thing to give back. */
+body.keyboard-open .screen { padding-top: 14px; padding-bottom: 14px; }
+body.keyboard-open .topbar { margin-bottom: 14px; }
 
 /* Screens accent themselves; everything else reads from --accent. */
 #screen-solo        { --accent: #2ee6ff; --accent-ink: #04161a; }
@@ -320,7 +343,11 @@ body.in-game .bg-glow { opacity: 0.35; animation: none; }
    genuinely unpleasant to sit in front of; the accent survives as a thin
    leading edge, which carries the same signature without the flood. */
 #wipe {
-  position: fixed; inset: -10% -20%;
+  /* The shear is horizontal, so the panels need width to spare and nothing
+     vertical. Height follows the visible area so the sweep does not paint
+     across a keyboard. */
+  position: fixed; left: -20%; right: -20%; top: 0;
+  height: var(--app-h, 100%);
   z-index: 60; pointer-events: none;
   display: flex; gap: 0;
   transform: translateX(-130%) skewX(var(--skew));
@@ -519,7 +546,10 @@ body.in-game .bg-glow { opacity: 0.35; animation: none; }
 /* Both columns read as one centred block, so the side column stops short of
    the floor instead of stretching a mostly-empty panel to it. */
 #screen-menu .side-column { justify-content: center; }
-#screen-menu .side-column .panel.grow { flex: 0 1 auto; min-height: 230px; max-height: 46vh; }
+#screen-menu .side-column .panel.grow {
+  flex: 0 1 auto; min-height: 230px;
+  max-height: calc(var(--app-h, 100vh) * 0.46);
+}
 
 .menu-list { display: flex; flex-direction: column; gap: 5px; }
 
@@ -663,10 +693,14 @@ body.in-game .bg-glow { opacity: 0.35; animation: none; }
   -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 22px), transparent);
   mask-image: linear-gradient(180deg, #000 calc(100% - 22px), transparent);
 }
-.scroll::-webkit-scrollbar { width: 6px; }
-.scroll::-webkit-scrollbar-thumb { background: var(--surface-3); }
-.scroll::-webkit-scrollbar-thumb:hover { background: var(--accent); }
-.scroll::-webkit-scrollbar-track { background: transparent; }
+.scroll::-webkit-scrollbar, .screen::-webkit-scrollbar,
+.modal-host::-webkit-scrollbar { width: 6px; }
+.scroll::-webkit-scrollbar-thumb, .screen::-webkit-scrollbar-thumb,
+.modal-host::-webkit-scrollbar-thumb { background: var(--surface-3); }
+.scroll::-webkit-scrollbar-thumb:hover, .screen::-webkit-scrollbar-thumb:hover,
+.modal-host::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+.scroll::-webkit-scrollbar-track, .screen::-webkit-scrollbar-track,
+.modal-host::-webkit-scrollbar-track { background: transparent; }
 
 /* ---------------------------------------------------------------- tables */
 
@@ -760,11 +794,20 @@ body.in-game .bg-glow { opacity: 0.35; animation: none; }
 
 #screen-game { padding: 0; }
 
+/* min-height:0 so the stage can be smaller than the board it holds: a flex
+   item refuses to shrink below its content by default, which left the stage
+   taller than the window and the bottom of the matrix clipped off. It is
+   U.fitStage's job to scale the board into whatever room there is. */
 .stage {
-  flex: 1; display: flex; align-items: center; justify-content: center;
+  flex: 1; min-height: 0; min-width: 0;
+  display: flex; align-items: center; justify-content: center;
   padding: 20px;
 }
-.match-column { display: flex; flex-direction: column; align-items: center; }
+.match-column {
+  display: flex; flex-direction: column; align-items: center;
+  transform: scale(var(--stage-scale, 1));
+  transform-origin: center center;
+}
 .play-area { display: flex; align-items: flex-start; gap: 14px; }
 .play-area .side.left { align-items: stretch; }
 
@@ -1040,7 +1083,8 @@ canvas#board { display: block; }
 /* ------------------------------------------------------------------ misc */
 
 .toast-host {
-  position: fixed; right: 26px; bottom: 26px; z-index: 90;
+  position: fixed; right: 26px; z-index: 90;
+  bottom: calc(26px + var(--kb-h, 0px) + env(safe-area-inset-bottom));
   display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
 }
 .toast {
@@ -1054,14 +1098,25 @@ canvas#board { display: block; }
 @keyframes toast-in { from { opacity: 0; transform: translateX(40px) skewX(var(--skew)); } }
 
 .modal-host {
-  position: fixed; inset: 0; z-index: 80;
+  position: fixed; left: 0; right: 0; top: 0;
+  height: var(--app-h, 100%);
+  z-index: 80;
   background: rgba(4,4,7,0.84);
-  display: none; place-items: center;
+  display: none;
+  padding: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
-.modal-host.open { display: grid; animation: fade-in 0.2s linear; }
+/* A flex box with `margin: auto` on the child, not `place-items: center`:
+   auto margins collapse to zero when the child is taller than the box, so a
+   long dialog starts at the top and can be scrolled through instead of
+   having its head cut off. */
+.modal-host.open { display: flex; animation: fade-in 0.2s linear; }
 @keyframes fade-in { from { opacity: 0; } }
 .modal {
   width: min(500px, 92vw);
+  margin: auto;
+  flex-shrink: 0;
   background: var(--surface); padding: 30px 32px;
   box-shadow: inset 0 0 0 1px var(--line-2);
   animation: modal-in 0.38s var(--ease-snap) both;
@@ -1155,7 +1210,10 @@ canvas#board { display: block; }
   .opponents { flex-direction: column; }
 }
 @media (max-width: 900px) {
-  .screen { padding: 18px; }
+  .screen {
+    padding: max(18px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right))
+             max(18px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
+  }
   .side { width: 108px; }
   .stage { padding: 10px; }
   .popup-rail { display: none; }

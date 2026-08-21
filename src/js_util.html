@@ -182,6 +182,89 @@ var U = (function () {
     return lum > 0.62 ? '#16151d' : '#ffffff';
   }
 
+  /* -------------------------------------------------------------- viewport */
+
+  /**
+   * iOS does not shrink the layout viewport when the software keyboard opens.
+   * It leaves the page at its full height, covers the bottom of it with the
+   * keyboard, and scrolls the document to bring the focused field into view.
+   * With the app pinned to inset:0 and the body unable to scroll, the rest of
+   * the interface ends up behind the keyboard with no way to reach it — which
+   * on an iPad means the sign-in card, the chat box or the room settings are
+   * simply cut off as soon as you tap a field.
+   *
+   * So the app is sized from the *visual* viewport rather than the window,
+   * and anything that positions itself against the bottom edge reads --kb-h.
+   */
+  var viewport = { height: 0, keyboard: 0 };
+
+  function applyViewport(height, offsetTop) {
+    var root = document.documentElement;
+    var full = window.innerHeight || height;
+    var hidden = Math.max(0, Math.round(full - height - (offsetTop || 0)));
+    viewport.height = Math.round(height);
+    viewport.keyboard = hidden;
+    root.style.setProperty('--app-h', viewport.height + 'px');
+    root.style.setProperty('--kb-h', hidden + 'px');
+    // A keyboard takes a large bite; a browser toolbar sliding away does not.
+    var covered = hidden > 120;
+    document.body.classList.toggle('keyboard-open', covered);
+    fitStage();
+
+    // The field that raised the keyboard is the one you need to see. iOS
+    // scrolls the document to reveal it before the app has been resized, and
+    // syncViewport then undoes that scroll; bring it back into view inside
+    // the screen, which is where it can actually be scrolled to.
+    var active = document.activeElement;
+    if (covered && active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) {
+      try { active.scrollIntoView({ block: 'center' }); } catch (e) {}
+    }
+  }
+
+  function syncViewport() {
+    var vv = window.visualViewport;
+    applyViewport(vv ? vv.height : window.innerHeight, vv ? vv.offsetTop : 0);
+    // iOS scrolls the document to reveal the focused field. The field is
+    // inside the visible box now, so there is nothing to reveal — and any
+    // scroll it did leaves the page offset for good, since the body cannot
+    // be scrolled back.
+    if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
+  }
+
+  function watchViewport() {
+    var vv = window.visualViewport;
+    if (vv) {
+      vv.addEventListener('resize', syncViewport);
+      vv.addEventListener('scroll', syncViewport);
+    }
+    window.addEventListener('resize', syncViewport);
+    // The orientation change fires before the new size is readable.
+    window.addEventListener('orientationchange', function () { setTimeout(syncViewport, 250); });
+    syncViewport();
+  }
+
+  /**
+   * The matrix is a fixed 320x672 canvas with a rail either side. Any window
+   * shorter than about 780px cannot show all of it, and the bottom rows —
+   * the ones that decide the game — are the ones that get cropped. Scale the
+   * whole column down to fit instead: a smaller board is playable, most of a
+   * board is not.
+   */
+  function fitStage() {
+    var stage = $('.stage');
+    var column = $('.match-column');
+    if (!stage || !column) return;
+    column.style.setProperty('--stage-scale', '1');
+    if (!stage.clientHeight || !column.offsetHeight) return;
+
+    var cs = getComputedStyle(stage);
+    var availW = stage.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    var availH = stage.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    var scale = Math.min(1, availW / column.offsetWidth, availH / column.offsetHeight);
+    // Below this the board is too small to read; the window is the problem.
+    column.style.setProperty('--stage-scale', String(Math.max(0.4, Math.floor(scale * 1000) / 1000)));
+  }
+
   /* ----------------------------------------------------------------- audio */
 
   var audioCtx = null;
@@ -210,6 +293,8 @@ var U = (function () {
     countUp: countUp, replay: replay, reduceMotion: reduceMotion,
     toast: toast, modal: modal, closeModal: closeModal,
     paintRankBadge: paintRankBadge, pickTextColor: pickTextColor,
+    viewport: viewport, applyViewport: applyViewport, watchViewport: watchViewport,
+    fitStage: fitStage,
     beep: beep
   };
 })();

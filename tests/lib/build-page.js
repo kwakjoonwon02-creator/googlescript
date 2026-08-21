@@ -192,6 +192,9 @@ function buildPage(mode) {
   const shared = mode === 'shared';
   const parts = [
     '<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8">',
+    // Kept in step with the tag doGet adds; the browser suite measures layout.
+    '<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, ' +
+      'viewport-fit=cover, interactive-widget=resizes-content">',
     '<title>TETRA.GS test</title>',
     read('css.html'),
     '</head><body>',

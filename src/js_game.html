@@ -925,6 +925,8 @@ var Game = (function () {
   function renderOpponentShells(players) {
     var host = U.$('#opponents');
     U.clear(host);
+    // Every extra board on the rail takes width off the one being played on.
+    setTimeout(U.fitStage, 0);
     // Watching means these are the only boards on screen, so draw them big.
     var wide = G.spectating ? 180 : 110;
     players.forEach(function (p) {
@@ -960,6 +962,8 @@ var Game = (function () {
     else if (versus) extraKey.textContent = 'VS';
     else extraKey.textContent = 'Combo';
     U.clear(U.$('#popups'));
+    // Showing or hiding a rail changes how much room the board has.
+    U.fitStage();
   }
 
   function updateHud() {
