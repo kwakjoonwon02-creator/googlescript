@@ -3,15 +3,17 @@
    Design language: an arcade cabinet, not a dashboard.
 
    Four rules hold it together.
-   1. SKEW. Every interactive surface is sheared, with its content sheared
-      back. Nothing else in the UI is diagonal, so the shape alone says
-      "this is a control". The angle is shallow (-6deg): enough to read as
-      deliberate, not so much that the interface looks like it is falling
-      over.
-   2. ONE ACCENT AT A TIME. Each screen sets --accent, and buttons, bars,
-      focus rings and highlights all read from it. Navigating shifts the
-      whole room's colour instead of scattering hues around. Accent is for
-      the one thing you are meant to press, never for decoration.
+   1. SQUARE. Everything used to be sheared -6deg — badges, toasts, popups,
+      panel ticks, menu rows, the score strip. A gesture applied to every
+      element is not a signature, it is wallpaper, and a whole interface
+      leaning over is the first thing that makes it look generated. The only
+      diagonal left is the leading edge of the screen transition, where a
+      diagonal is doing something.
+   2. ONE ACCENT, FULL STOP. Every screen used to set its own hue and every
+      menu row a sixth, which is a swatch rather than a palette. Colour now
+      means something specific: the accent is what you are meant to press,
+      the seven tetromino colours belong to the board, rank colours are
+      data, green and red are won and lost. Nothing else is coloured.
    3. FLAT ON BLACK. Depth is a hairline and a top-edge highlight, not a
       pile of drop shadows. Shadow only separates things that float.
    4. TRACKING IS FOR LATIN. Wide letter-spacing is what makes small
@@ -38,15 +40,18 @@
   --dim:         #9598a8;
   --faint:       #5b5e6f;
 
-  /* accents ------------------------------------------------------------- */
-  --accent:      #ff6a1a;
-  --accent-ink:  #120a04;
-  --cyan:        #2ee6ff;
-  --violet:      #a855f7;
-  --lime:        #4ade5e;
-  --gold:        #fbbf24;
-  --good:        #3ddc84;
-  --bad:         #ff4d63;
+  /* accent -------------------------------------------------------------- */
+  /* One. The app used to give every screen its own hue and every menu row a
+     sixth, which is a swatch rather than a palette — five saturated colours
+     on one page is what makes an interface look assembled from a template.
+     Colour now means something specific: this is the accent, these are the
+     seven tetromino colours on the board, these are the rank colours, and
+     green/red are win and loss. Nothing else is coloured at all. */
+  --accent:      #ff5f1f;
+  --accent-dim:  #b34314;
+  --accent-ink:  #140803;
+  --good:        #35c46f;
+  --bad:         #e8455c;
 
   /* pieces -------------------------------------------------------------- */
   --piece-i: #2ee6ff;
@@ -59,19 +64,34 @@
   --piece-g: #4a4a5c;
 
   /* type ---------------------------------------------------------------- */
-  /* Latin first, Korean behind it: the browser falls through per glyph, so
-     Latin gets the condensed face and Hangul gets one that actually has the
-     glyphs instead of a random system default. */
+  /* One Latin family at several weights and widths rather than two. The
+     previous pair was condensed-uppercase everywhere, which is the default
+     look of every esports overlay ever made; a plain grotesque with a real
+     size range reads as something a person set.
+     Latin first, Korean behind it: the browser falls through per glyph, so
+     Hangul gets a face that actually has the glyphs instead of whatever the
+     machine happens to default to. */
   --kr: 'Noto Sans KR', 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic';
-  --font-ui: 'Barlow Semi Condensed', var(--kr), -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-display: 'Barlow Condensed', var(--kr), -apple-system, sans-serif;
+  --font-ui: 'Archivo', var(--kr), -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-display: 'Archivo', var(--kr), -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'D2Coding', ui-monospace, SFMono-Regular, Menlo, monospace;
   /* The only tracking wide enough to be a style. Reserved for Latin. */
-  --track: 0.18em;
+  --track: 0.16em;
+
+  /* A scale, not a pile of one-off sizes. Everything picks from these. */
+  --t-hero:  clamp(40px, 4.4vw, 60px);
+  --t-xl:    32px;
+  --t-lg:    22px;
+  --t-md:    17px;
+  --t-base:  15px;
+  --t-sm:    13px;
+  --t-xs:    11px;
 
   /* geometry ------------------------------------------------------------ */
-  --skew: -6deg;
-  --unskew: 6deg;
+  /* The shear survives in exactly one place: the leading edge of the screen
+     transition. It used to be on every surface in the app, and a gesture
+     applied to everything stops reading as a choice. */
+  --skew: -8deg;
 
   /* motion -------------------------------------------------------------- */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -183,19 +203,18 @@ body.in-game .bg-glow { opacity: 0.35; animation: none; }
 /* The board is scaled to fit rather than scrolled; see U.fitStage. */
 #screen-game { overflow: hidden; }
 
+/* Settings panels size to their content. Stretched to the floor they left
+   two thirds of every column empty. */
+#screen-config .row.grow { align-items: flex-start; }
+#screen-config .panel.grow { flex: 0 1 auto; }
+
 /* Vertical room is scarce exactly when a keyboard is up, and the margins are
    the cheapest thing to give back. */
 body.keyboard-open .screen { padding-top: 14px; padding-bottom: 14px; }
 body.keyboard-open .topbar { margin-bottom: 14px; }
 
-/* Screens accent themselves; everything else reads from --accent. */
-#screen-solo        { --accent: #2ee6ff; --accent-ink: #04161a; }
-#screen-multi,
-#screen-room        { --accent: #a855f7; --accent-ink: #150520; }
-#screen-queue       { --accent: #ff4d63; --accent-ink: #1a0508; }
-#screen-leaderboard { --accent: #fbbf24; --accent-ink: #170f01; }
-#screen-config      { --accent: #4ade5e; --accent-ink: #04170a; }
-#screen-auth        { --accent: #ff6a1a; --accent-ink: #120a04; }
+/* Every screen shares the accent. Navigating used to repaint the whole room
+   a different colour, which is a lot of personality for a menu to have. */
 
 /* ------------------------------------------------------------- sign in */
 
@@ -231,10 +250,9 @@ body.keyboard-open .topbar { margin-bottom: 14px; }
   content: '';
   position: absolute;
   left: 0; top: 50%;
-  width: 5px; height: 5px;
+  width: 4px; height: 4px;
   margin-top: -2px;
   background: var(--accent);
-  transform: skewX(var(--skew));
   pointer-events: none;
 }
 .auth-points b {
@@ -282,7 +300,7 @@ body.keyboard-open .topbar { margin-bottom: 14px; }
 }
 .auth-error::before {
   content: ''; position: absolute; left: 0; top: 3px; bottom: 3px;
-  width: 2px; background: var(--bad); transform: skewX(var(--skew));
+  width: 2px; background: var(--bad);
   pointer-events: none;
 }
 .auth-error.show { max-height: 60px; opacity: 1; }
@@ -335,7 +353,7 @@ body.keyboard-open .topbar { margin-bottom: 14px; }
 }
 
 @keyframes rise { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
-@keyframes deal { from { opacity: 0; transform: translate3d(-26px, 0, 0) skewX(var(--skew)); } }
+@keyframes deal { from { opacity: 0; transform: translate3d(-26px, 0, 0); } }
 
 /* Full-screen wipe played on every navigation. */
 /* The panels are near-black on purpose. A full-viewport sweep of saturated
@@ -366,9 +384,10 @@ body.keyboard-open .topbar { margin-bottom: 14px; }
 
 .title-xl {
   font-family: var(--font-display);
-  font-size: clamp(46px, 5vw, 68px);
-  font-weight: 800; line-height: 0.88;
-  letter-spacing: -0.025em; text-transform: uppercase;
+  font-size: var(--t-hero);
+  font-weight: 800; line-height: 0.9;
+  letter-spacing: -0.035em; text-transform: uppercase;
+  font-stretch: 108%;
   margin: 0;
 }
 .title-xl .dot { color: var(--accent); }
@@ -383,31 +402,30 @@ body.keyboard-open .topbar { margin-bottom: 14px; }
   color: var(--faint); margin: 0 0 14px;
 }
 .kicker::before {
-  content: ''; width: 18px; height: 2px; background: var(--accent);
-  transform: skewX(var(--skew)); flex-shrink: 0;
+  content: ''; width: 16px; height: 1px; background: var(--accent);
+  flex-shrink: 0;
 }
 
 .title-lg {
   font-family: var(--font-display);
-  font-size: 32px; font-weight: 800; line-height: 1;
-  letter-spacing: 0.005em; text-transform: uppercase;
+  font-size: var(--t-xl); font-weight: 700; line-height: 1;
+  letter-spacing: -0.02em; text-transform: uppercase;
   margin: 0;
-  position: relative; padding-left: 15px;
+  position: relative; padding-left: 14px;
 }
 /* Every page title carries the accent as a slab on its left edge. */
 .title-lg::before {
-  content: ''; position: absolute; left: 0; top: 10%; bottom: 10%;
-  width: 4px; background: var(--accent);
-  transform: skewX(var(--skew));
+  content: ''; position: absolute; left: 0; top: 12%; bottom: 12%;
+  width: 3px; background: var(--accent);
 }
 
 /* Bilingual: almost no tracking, and not uppercased — neither does anything
    for Hangul and both hurt it. */
 .subtitle {
-  color: var(--dim); font-size: 14px; font-weight: 500;
-  letter-spacing: 0.01em; margin: 0;
+  color: var(--dim); font-size: var(--t-base); font-weight: 400;
+  letter-spacing: 0; margin: 0;
 }
-.hint { color: var(--faint); font-size: 13px; line-height: 1.6; letter-spacing: 0; }
+.hint { color: var(--faint); font-size: var(--t-sm); line-height: 1.6; letter-spacing: 0; }
 
 /* ---------------------------------------------------------------- header */
 
@@ -417,58 +435,58 @@ body.keyboard-open .topbar { margin-bottom: 14px; }
 }
 .topbar-left { display: flex; align-items: center; gap: 18px; }
 
+/* Just the name, with the affordance kept until you look for it. The chip
+   used to repeat the rank badge and the TR figure the hero already shows. */
+/* Small, set once, and never explained. The wordmark used to be 68px of
+   condensed capitals taking a third of the menu. */
+.wordmark {
+  font-family: var(--font-display);
+  font-size: var(--t-md); font-weight: 800;
+  letter-spacing: 0.02em; text-transform: uppercase;
+  font-stretch: 108%;
+  color: var(--text);
+}
+.wordmark .dot { color: var(--accent); }
+
 .identity {
-  position: relative; isolation: isolate;
-  display: flex; align-items: center; gap: 14px;
-  padding: 8px 24px 8px 8px;
+  display: flex; align-items: baseline; gap: 12px;
   cursor: pointer;
-  transition: transform var(--med) var(--ease-out);
+  padding: 4px 0;
 }
-.identity::before {
-  content: ''; position: absolute; inset: 0; z-index: -1;
-  background: var(--surface);
-  transform: skewX(var(--skew));
-  transition: background var(--fast) linear;
+.identity-name {
+  font-weight: 600; font-size: var(--t-md); letter-spacing: -0.005em; line-height: 1.2;
+  transition: color var(--fast) linear;
 }
-.identity:hover { transform: translateX(5px); }
-.identity:hover::before { background: var(--surface-2); }
-.identity-name { font-weight: 700; font-size: 20px; letter-spacing: 0.005em; line-height: 1.15; }
-/* Latin by construction: a TR figure and a win-loss record. */
-.identity-sub {
-  font-size: 11px; color: var(--dim); font-weight: 600;
-  letter-spacing: 0.14em; text-transform: uppercase;
-  font-variant-numeric: tabular-nums;
+.identity-edit {
+  font-size: var(--t-xs); color: var(--faint);
+  opacity: 0; transform: translateX(-4px);
+  transition: opacity var(--fast) linear, transform var(--fast) var(--ease-out);
+}
+.identity:hover .identity-edit { opacity: 1; transform: none; }
+.identity:hover .identity-name { color: var(--accent); }
+.identity.guest .identity-name::after {
+  content: 'GUEST';
+  margin-left: 9px; padding: 2px 6px;
+  font-size: 9px; letter-spacing: var(--track); font-weight: 700;
+  color: var(--faint); box-shadow: inset 0 0 0 1px var(--line-2);
+  vertical-align: 3px;
 }
 
 /* ----------------------------------------------------------- rank badges */
 
-/* Badges stay square on purpose. They are identity, not a control, and the
-   skew language is reserved for things you can click. */
+/* Badges are identity, not controls, so they are square. They used to have a
+   gloss sweeping across them every six seconds, which is the kind of thing
+   that makes a UI look like a screensaver. */
 .rank-badge {
-  position: relative;
-  width: 46px; height: 46px; flex-shrink: 0;
+  width: 42px; height: 42px; flex-shrink: 0;
   display: grid; place-items: center;
   font-family: var(--font-display);
-  font-weight: 800; font-size: 21px;
+  font-weight: 800; font-size: 19px; letter-spacing: -0.02em;
   background: var(--surface-3); color: #fff;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.12);
-  overflow: hidden;
 }
-.rank-badge::after {
-  content: ''; position: absolute; top: -20%; bottom: -20%; width: 40%;
-  background: linear-gradient(100deg, transparent, rgba(255,255,255,0.28), transparent);
-  transform: translateX(-280%) skewX(-16deg);
-}
-@media (prefers-reduced-motion: no-preference) {
-  .rank-badge::after { animation: shine 6s ease-in-out infinite; }
-}
-@keyframes shine {
-  0%, 74% { transform: translateX(-280%) skewX(-16deg); }
-  90%, 100% { transform: translateX(340%) skewX(-16deg); }
-}
-
-.rank-badge.sm { width: 32px; height: 32px; font-size: 15px; }
-.rank-badge.xs { width: 24px; height: 24px; font-size: 12px; }
+.rank-badge.lg { width: 62px; height: 62px; font-size: 28px; }
+.rank-badge.sm { width: 30px; height: 30px; font-size: 14px; }
+.rank-badge.xs { width: 22px; height: 22px; font-size: 11px; }
 
 /* --------------------------------------------------------------- buttons */
 
@@ -493,7 +511,6 @@ body.keyboard-open .topbar { margin-bottom: 14px; }
 .btn::before {
   content: ''; position: absolute; inset: 0; z-index: -1;
   pointer-events: none;
-  transform: skewX(var(--skew));
   background-image: linear-gradient(90deg,
     var(--btn-fill, var(--accent)) 0 50%, var(--btn-base, var(--surface-2)) 50% 100%);
   /* Slightly wider than two halves so the seam between them sits just past
@@ -510,10 +527,18 @@ body.keyboard-open .topbar { margin-bottom: 14px; }
 .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 .btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
-.btn.primary { color: var(--accent-ink); --btn-base: var(--accent); --btn-fill: #fff; }
+.btn.primary {
+  color: var(--accent-ink);
+  --btn-base: var(--accent);
+  --btn-fill: color-mix(in srgb, var(--accent) 72%, #fff);
+}
 .btn.danger { color: var(--bad); --btn-fill: var(--bad); }
 .btn.danger:hover:not(:disabled) { color: #fff; }
-.btn.ghost { --btn-base: transparent; }
+/* A secondary button fills with surface, not with the accent. Every button
+   in the app flashing the accent on hover is how "cancel" ends up looking
+   like the thing you are supposed to press. */
+.btn.ghost { --btn-base: transparent; --btn-fill: var(--surface-2); }
+.btn.ghost:hover:not(:disabled) { color: var(--text); }
 .btn.ghost::before { box-shadow: inset 0 0 0 1px var(--line-2); }
 
 .btn.sm { font-size: 11px; padding: 8px 17px; letter-spacing: 0.03em; }
@@ -551,73 +576,141 @@ body.keyboard-open .topbar { margin-bottom: 14px; }
   max-height: calc(var(--app-h, 100vh) * 0.46);
 }
 
-.menu-list { display: flex; flex-direction: column; gap: 5px; }
+/* ---- the one thing on this screen with any size to it ---- */
 
-/* The row is a slab of surface with a coloured edge. The colour used to be
-   a six-pixel bar and a wash across a fifth of the row, which is a lot of
-   paint for a list; it is a hairline that thickens under the cursor now,
-   and the wash only appears on hover. */
+/* Five identical rows means nothing is primary, and a menu where every item
+   shouts equally is a menu nobody reads. Ranked is what the app is for, so
+   it gets the space, and the other four become a list. */
+.hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: 'line rating' 'go rating';
+  align-items: start;
+  gap: 30px 34px;
+  padding: 28px 30px 26px;
+  margin-bottom: 26px;
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 var(--edge), inset 0 0 0 1px var(--line);
+  cursor: pointer;
+  transition: background var(--fast) linear, box-shadow var(--fast) linear;
+}
+.hero::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+  width: 2px; background: var(--accent);
+  pointer-events: none;
+}
+.hero:hover {
+  background: var(--surface-2);
+  box-shadow: inset 0 1px 0 var(--edge), inset 0 0 0 1px var(--line-2);
+}
+.hero:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.hero-line { grid-area: line; min-width: 0; }
+.hero-title {
+  font-family: var(--font-display);
+  font-size: 44px; font-weight: 800; line-height: 1;
+  letter-spacing: -0.04em;
+  margin: 0;
+}
+.hero-desc {
+  margin: 12px 0 0; max-width: 38ch;
+  color: var(--dim); font-size: var(--t-sm); line-height: 1.6;
+}
+
+/* The one big number on the screen is a rating, which is real data. An
+   interface looks designed when the largest thing on it is something worth
+   reading rather than an ornament. */
+.hero-rating {
+  grid-area: rating;
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  justify-items: end;
+  column-gap: 16px; row-gap: 5px;
+  text-align: right;
+}
+/* Bottom right, so the rating and the button share a baseline and the empty
+   quarter of the card is the one diagonally opposite the title. */
+.hero-rating { align-self: end; }
+.hero-rating .rank-badge { grid-row: span 2; }
+.hero-figure {
+  font-family: var(--font-mono); font-weight: 700;
+  font-size: 38px; line-height: 1;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+  display: flex; align-items: baseline; gap: 7px;
+}
+.hero-figure em {
+  font-family: var(--font-ui); font-style: normal;
+  font-size: var(--t-xs); font-weight: 700;
+  letter-spacing: var(--track); color: var(--faint);
+}
+.hero-note {
+  margin: 0; grid-column: 2;
+  font-size: var(--t-xs); color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+/* The card is the control; the button is the affordance on it. */
+.hero-go { grid-area: go; justify-self: start; align-self: end; pointer-events: none; }
+
+.menu-list { display: flex; flex-direction: column; }
+
+/* Rows on a rule, not five boxes in a stack. Each one used to be a slab of
+   surface with its own colour, an outlined capital for an icon and a wash
+   across a fifth of its width — five of those in a row is a swatch book.
+   This is a list: a hairline between entries, an ordinal, a name, and
+   whatever fact about that mode is worth knowing before picking it. */
 .menu-item {
   position: relative;
-  display: flex; align-items: center; gap: 18px;
-  padding: 16px 26px;
-  background: var(--surface);
+  display: flex; align-items: center; gap: 20px;
+  padding: 15px 16px 15px 0;
   cursor: pointer;
-  overflow: hidden;
-  transform: skewX(var(--skew));
-  box-shadow: inset 0 1px 0 var(--edge);
-  transition: transform var(--med) var(--ease-out), background var(--fast) linear;
+  box-shadow: inset 0 -1px 0 var(--line);
+  transition: background var(--fast) linear, padding var(--med) var(--ease-out);
 }
-.menu-item > * { transform: skewX(var(--unskew)); }
+.menu-item:last-child { box-shadow: none; }
 .menu-item::before {
   content: ''; position: absolute; left: 0; top: 0; bottom: 0;
-  width: 3px; background: var(--item-color, var(--accent));
-  transition: width var(--med) var(--ease-out);
+  width: 2px; background: var(--accent);
+  transform: scaleY(0); transform-origin: bottom;
+  transition: transform var(--med) var(--ease-out);
   pointer-events: none;
 }
-.menu-item::after {
-  content: ''; position: absolute; inset: 0;
-  background: linear-gradient(90deg,
-    color-mix(in srgb, var(--item-color, var(--accent)) 14%, transparent), transparent 42%);
-  opacity: 0; transition: opacity var(--med) linear;
-  pointer-events: none;
-}
-.menu-item:hover { transform: skewX(var(--skew)) translateX(10px); background: var(--surface-2); }
-.menu-item:hover::before { width: 7px; }
-.menu-item:hover::after { opacity: 1; }
-.menu-item:active { transform: skewX(var(--skew)) translateX(10px) scale(0.995); }
+.menu-item:hover { background: var(--surface); padding-left: 16px; }
+.menu-item:hover::before { transform: scaleY(1); }
+.menu-item:active { background: var(--surface-2); }
 .menu-item.disabled { opacity: 0.35; pointer-events: none; }
-.menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
-/* A filled tile rather than an outlined box: it reads as a key cap, and it
-   carries the row's colour without a second stroke on the screen. */
-.menu-icon {
-  width: 40px; height: 40px; flex-shrink: 0;
-  display: grid; place-items: center;
-  font-family: var(--font-display);
-  font-size: 20px; font-weight: 800;
-  color: var(--item-color, var(--accent));
-  background: color-mix(in srgb, var(--item-color, var(--accent)) 15%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--item-color, var(--accent)) 38%, transparent);
-  transition: transform var(--med) var(--ease-snap), background var(--fast) linear;
+.menu-index {
+  font-family: var(--font-mono); font-size: var(--t-xs); font-weight: 500;
+  color: var(--faint); flex-shrink: 0; width: 20px;
+  font-variant-numeric: tabular-nums;
+  transition: color var(--fast) linear;
 }
-.menu-item:hover .menu-icon {
-  transform: skewX(var(--unskew)) scale(1.07);
-  background: color-mix(in srgb, var(--item-color, var(--accent)) 26%, transparent);
-}
+.menu-item:hover .menu-index { color: var(--accent); }
 
 .menu-text { flex: 1; min-width: 0; }
 .menu-title {
   font-family: var(--font-display);
-  font-size: 25px; font-weight: 800; line-height: 1.05;
-  letter-spacing: 0.015em; text-transform: uppercase;
+  font-size: var(--t-md); font-weight: 700; line-height: 1.2;
+  letter-spacing: 0.005em; text-transform: uppercase;
 }
-.menu-desc { font-size: 13px; color: var(--dim); margin-top: 3px; line-height: 1.45; }
+.menu-desc { font-size: var(--t-sm); color: var(--dim); margin-top: 3px; line-height: 1.5; }
+/* A small data column: a Latin key over a figure. Block, not flex, so a
+   value like "LV.3" stays on one line. */
 .menu-meta {
-  font-family: var(--font-mono); font-size: 11px; color: var(--faint);
-  text-align: right; line-height: 1.5;
+  font-size: var(--t-sm); color: var(--dim);
+  text-align: right; line-height: 1.3; flex-shrink: 0;
   font-variant-numeric: tabular-nums;
 }
+.menu-meta .k {
+  display: block; margin-bottom: 3px;
+  font-size: 9px; font-weight: 700; letter-spacing: var(--track);
+  text-transform: uppercase; color: var(--faint);
+}
+.menu-index.mono-code { width: auto; letter-spacing: 0.12em; }
 
 /* ---------------------------------------------------------------- panels */
 
@@ -641,8 +734,8 @@ body.keyboard-open .topbar { margin-bottom: 14px; }
   display: flex; align-items: center; gap: 9px;
 }
 .panel-title::before {
-  content: ''; width: 3px; height: 13px; background: var(--accent);
-  transform: skewX(var(--skew)); flex-shrink: 0;
+  content: ''; width: 2px; height: 12px; background: var(--accent);
+  flex-shrink: 0;
 }
 
 /* Something belongs here and is not here yet. Says so quietly, centred,
@@ -654,9 +747,8 @@ body.keyboard-open .topbar { margin-bottom: 14px; }
   font-size: 13px; padding: 20px 12px;
 }
 .empty::before {
-  content: ''; width: 26px; height: 26px;
-  box-shadow: inset 0 0 0 2px var(--line-2);
-  transform: skewX(var(--skew));
+  content: ''; width: 22px; height: 22px;
+  box-shadow: inset 0 0 0 1px var(--line-2);
 }
 
 /* The column beside a main list: wide enough for three stat cells, never
@@ -779,7 +871,6 @@ body.keyboard-open .topbar { margin-bottom: 14px; }
 .stepper button::before {
   content: ''; position: absolute; inset: 0; z-index: -1;
   background: var(--surface-2);
-  transform: skewX(var(--skew));
   transition: background var(--fast) linear;
 }
 .stepper button:hover { color: var(--accent-ink); }
@@ -830,7 +921,7 @@ body.keyboard-open .topbar { margin-bottom: 14px; }
 }
 .stat .v { font-family: var(--font-mono); font-size: 17px; font-weight: 700; }
 .stat.big .v { font-size: 24px; }
-.stat.timer .v { color: var(--cyan); }
+.stat.timer .v { color: var(--piece-i); }
 
 /* ---- board ---- */
 .board-wrap { position: relative; display: flex; align-items: stretch; gap: 9px; }
@@ -843,7 +934,7 @@ body.keyboard-open .topbar { margin-bottom: 14px; }
 }
 .garbage-fill {
   width: 100%;
-  background: linear-gradient(180deg, var(--gold), var(--bad));
+  background: linear-gradient(180deg, var(--piece-o), var(--bad));
   transition: height 0.09s linear;
 }
 .garbage-fill.hot {
@@ -905,8 +996,8 @@ canvas#board { display: block; }
 .popup.type  { font-size: 25px; color: #fff; }
 .popup.spin  { color: var(--piece-t); }
 .popup.quad  { color: var(--piece-i); }
-.popup.b2b   { font-size: 17px; color: var(--gold); font-family: var(--font-mono); font-weight: 700; }
-.popup.combo { font-size: 22px; color: var(--cyan); }
+.popup.b2b   { font-size: 17px; color: var(--piece-o); font-family: var(--font-mono); font-weight: 700; }
+.popup.combo { font-size: 22px; color: var(--piece-i); }
 .popup.pc    { font-size: 26px; color: var(--good); }
 @keyframes popup-in  { from { opacity: 0; transform: translateX(34px) scale(0.7); } }
 @keyframes popup-out { to { opacity: 0; transform: translateX(-18px); } }
@@ -939,16 +1030,13 @@ canvas#board { display: block; }
   padding: 11px 26px; margin-bottom: 8px;
   background: rgba(10,10,15,0.82);
   box-shadow: inset 0 0 0 1px var(--line);
-  transform: skewX(var(--skew));
 }
-.score-strip > * { transform: skewX(var(--unskew)); }
 .score-side { display: flex; align-items: center; gap: 11px; }
 .score-side .nm { font-family: var(--font-display); font-weight: 800; font-size: 19px; text-transform: uppercase; }
 .pips { display: flex; gap: 5px; }
 .pip {
   width: 9px; height: 17px;
   background: var(--surface-3);
-  transform: skewX(var(--skew));
   transition: background var(--med) var(--ease-out), box-shadow var(--med) linear;
 }
 .pip.on { background: var(--accent); box-shadow: 0 0 16px -2px var(--accent); }
@@ -973,7 +1061,7 @@ canvas#board { display: block; }
 .result-headline.win { color: var(--good); }
 .result-headline.lose { color: var(--bad); }
 @keyframes headline-in {
-  from { opacity: 0; transform: scale(0.82) skewX(var(--skew)); letter-spacing: 0.3em; }
+  from { opacity: 0; transform: scale(0.82); letter-spacing: 0.3em; }
 }
 
 .tr-change { display: flex; align-items: center; justify-content: center; gap: 24px; margin: 30px 0 12px; }
@@ -986,20 +1074,30 @@ canvas#board { display: block; }
 }
 .tr-delta::before {
   content: ''; position: absolute; inset: 0; z-index: -1;
-  transform: skewX(var(--skew));
 }
 .tr-delta.up { color: var(--accent-ink); }
 .tr-delta.up::before { background: var(--good); }
 .tr-delta.down { color: #fff; }
 .tr-delta.down::before { background: var(--bad); }
 
-.stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 26px; }
-.stat-cell { background: var(--bg-2); padding: 14px 10px; text-align: center; }
+/* Numbers on the ground, ruled apart. Six filled tiles read as six buttons,
+   and none of these do anything. */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 1px; margin-top: 26px;
+  background: var(--line);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.stat-cell { background: var(--surface); padding: 13px 10px; text-align: center; }
 .stat-cell .k {
-  font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase;
+  font-size: 9px; letter-spacing: var(--track); text-transform: uppercase;
   color: var(--faint); font-weight: 700;
 }
-.stat-cell .v { font-family: var(--font-mono); font-size: 22px; font-weight: 700; margin-top: 6px; }
+.stat-cell .v {
+  font-family: var(--font-mono); font-size: var(--t-lg); font-weight: 700;
+  margin-top: 5px; letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
 
 .rank-change-banner {
   margin-top: 22px; padding: 16px; text-align: center;
@@ -1013,22 +1111,51 @@ canvas#board { display: block; }
 /* ------------------------------------------------------------ queue view */
 
 .queue-box { text-align: center; max-width: 540px; margin: auto; }
+.queue-title {
+  font-family: var(--font-display);
+  font-size: var(--t-xl); font-weight: 700; line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin: 0 0 10px;
+}
+
+/* Seven cells lit one after another — a bag being dealt. A generic ring or
+   a pulsing square reads as a missing asset; this belongs to this app. */
 .queue-spinner {
-  width: 84px; height: 84px; margin: 0 auto 30px;
-  position: relative;
+  display: flex; gap: 6px; justify-content: center;
+  margin: 34px 0 30px;
 }
-.queue-spinner::before, .queue-spinner::after {
-  content: ''; position: absolute; inset: 0;
-  box-shadow: inset 0 0 0 3px var(--accent);
-  transform: skewX(var(--skew));
-  animation: pulse-out 1.6s var(--ease-out) infinite;
+.queue-spinner i {
+  width: 11px; height: 11px;
+  background: var(--surface-3);
 }
-.queue-spinner::after { animation-delay: 0.8s; }
-@keyframes pulse-out {
-  from { transform: skewX(var(--skew)) scale(0.4); opacity: 1; }
-  to   { transform: skewX(var(--skew)) scale(1.15); opacity: 0; }
+@media (prefers-reduced-motion: no-preference) {
+  .queue-spinner i { animation: deal-bag 1.8s linear infinite; }
+  .queue-spinner i:nth-child(1) { animation-delay: 0s; }
+  .queue-spinner i:nth-child(2) { animation-delay: 0.09s; }
+  .queue-spinner i:nth-child(3) { animation-delay: 0.18s; }
+  .queue-spinner i:nth-child(4) { animation-delay: 0.27s; }
+  .queue-spinner i:nth-child(5) { animation-delay: 0.36s; }
+  .queue-spinner i:nth-child(6) { animation-delay: 0.45s; }
+  .queue-spinner i:nth-child(7) { animation-delay: 0.54s; }
 }
-.queue-stat { font-family: var(--font-mono); font-size: 14px; color: var(--dim); margin-top: 8px; }
+@keyframes deal-bag {
+  0%, 42%, 100% { background: var(--surface-3); }
+  10%           { background: var(--accent); }
+}
+
+.queue-figures {
+  display: flex; justify-content: center; gap: 46px;
+  margin-bottom: 34px;
+}
+.queue-figures .k {
+  display: block; margin-bottom: 5px;
+  font-size: 9px; font-weight: 700; letter-spacing: var(--track);
+  text-transform: uppercase; color: var(--faint);
+}
+.queue-figures b {
+  font-family: var(--font-mono); font-size: var(--t-lg); font-weight: 700;
+  letter-spacing: -0.02em; font-variant-numeric: tabular-nums;
+}
 
 /* ----------------------------------------------------------------- chat */
 
@@ -1068,7 +1195,7 @@ canvas#board { display: block; }
 }
 .rule-value::before {
   content: ''; position: absolute; inset: 0; z-index: -1;
-  background: var(--bg-2); transform: skewX(var(--skew));
+  background: var(--bg-2);
 }
 
 /* -------------------------------------------------------- spectator view */
@@ -1095,7 +1222,7 @@ canvas#board { display: block; }
 }
 .toast.error { box-shadow: inset 3px 0 0 var(--bad), 0 20px 50px -24px #000; }
 .toast.good { box-shadow: inset 3px 0 0 var(--good), 0 20px 50px -24px #000; }
-@keyframes toast-in { from { opacity: 0; transform: translateX(40px) skewX(var(--skew)); } }
+@keyframes toast-in { from { opacity: 0; transform: translateX(40px); } }
 
 .modal-host {
   position: fixed; left: 0; right: 0; top: 0;
@@ -1123,23 +1250,33 @@ canvas#board { display: block; }
 }
 @keyframes modal-in { from { opacity: 0; transform: translateY(24px) scale(0.96); } }
 
-.tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+/* Underlines, not filled pills. Two solid pills side by side read as two
+   equally important buttons — and as a <button> the inactive one was picking
+   up the browser's own light grey, which made the thing you had not chosen
+   the loudest object on the card. */
+.tabs {
+  display: flex; gap: 26px; margin-bottom: 20px;
+  box-shadow: inset 0 -1px 0 var(--line);
+}
 .tab {
-  position: relative; isolation: isolate;
-  font-size: 13px; letter-spacing: 0.01em; font-weight: 700;
-  padding: 10px 22px; cursor: pointer; color: var(--faint);
+  position: relative;
+  font-family: inherit;
+  font-size: var(--t-base); font-weight: 600; letter-spacing: 0.01em;
+  padding: 9px 1px 11px;
+  background: none; border: none;
+  cursor: pointer; color: var(--faint);
   transition: color var(--fast) linear;
 }
-.tab::before {
-  content: ''; position: absolute; inset: 0; z-index: -1;
-  background: transparent;
-  transform: skewX(var(--skew));
-  transition: background var(--fast) linear;
+.tab::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
+  background: var(--accent);
+  transform: scaleX(0); transform-origin: left;
+  transition: transform var(--med) var(--ease-out);
+  pointer-events: none;
 }
 .tab:hover { color: var(--dim); }
-.tab:hover::before { background: var(--surface); }
-.tab.active { color: var(--accent-ink); }
-.tab.active::before { background: var(--accent); }
+.tab.active { color: var(--text); }
+.tab.active::after { transform: scaleX(1); }
 
 .kbd {
   display: inline-block; min-width: 34px; padding: 5px 11px;
@@ -1161,32 +1298,37 @@ canvas#board { display: block; }
 }
 @keyframes listen-pulse { to { box-shadow: 0 0 26px -4px var(--accent); } }
 
+/* A badge states a fact. Filling it with the accent makes every one of them
+   compete with the single button on the screen that you are meant to press,
+   so a highlighted badge is a tinted outline instead. */
 .badge {
-  position: relative; isolation: isolate; display: inline-block;
+  display: inline-block;
   font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; font-weight: 700;
-  padding: 4px 11px; color: var(--dim);
-}
-.badge::before {
-  content: ''; position: absolute; inset: 0; z-index: -1;
+  padding: 4px 10px; color: var(--dim);
   background: var(--surface-3);
-  transform: skewX(var(--skew));
 }
-.badge.live { color: var(--accent-ink); }
-.badge.live::before { background: var(--good); }
-.badge.hot { color: var(--accent-ink); }
-.badge.hot::before { background: var(--accent); }
+.badge.live {
+  color: var(--good); background: color-mix(in srgb, var(--good) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--good) 40%, transparent);
+}
+.badge.hot {
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+}
 
 /* Counting numbers must not reflow what sits next to them. */
-.mono, .stat .v, .stat-cell .v, .tr-num, .tr-delta, .identity-sub,
-.table .num, .table .pos, .stepper .value, .rule-value, .queue-stat {
+.mono, .stat .v, .stat-cell .v, .tr-num, .tr-delta,
+.table .num, .table .pos, .stepper .value, .rule-value, .queue-figures b {
   font-variant-numeric: tabular-nums;
 }
 
 /* Nothing decorative should ever be in the way of a click. */
-.btn::before, .menu-item::before, .menu-item::after, .tab::before,
-.badge::before, .identity::before, .rule-value::before, .tr-delta::before,
-.stepper button::before, .rank-badge::after, .title-lg::before,
-.panel-title::before, .table th::after,
+.btn::before, .menu-item::before, .menu-item::after, .tab::after,
+.rule-value::before, .tr-delta::before,
+.stepper button::before, .title-lg::before,
+.panel-title::before, .table th::after, .kicker::before,
+.hero::before, .empty::before, .auth-card::before, .auth-error::before,
+.auth-points li::before, .auth-divider::before, .auth-divider::after,
 .queue-spinner::before, .queue-spinner::after {
   pointer-events: none;
 }

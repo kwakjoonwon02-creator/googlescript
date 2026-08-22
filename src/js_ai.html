@@ -14,11 +14,11 @@
  * beat, it makes it top out on its own, which is no fun to play against.
  */
 var AI_LEVELS = [
-  { name: '아주 쉬움',   pps: 0.55, mistake: 0.16 },
-  { name: '쉬움',        pps: 0.90, mistake: 0.10 },
-  { name: '보통',        pps: 1.35, mistake: 0.05 },
-  { name: '어려움',      pps: 1.90, mistake: 0.02 },
-  { name: '매우 어려움', pps: 2.60, mistake: 0.00 }
+  { name: '아주 쉬움',   pps: 0.55, mistake: 0.16, blurb: '천천히 쌓고 자주 실수합니다' },
+  { name: '쉬움',        pps: 0.90, mistake: 0.10, blurb: '기본기를 익히기 좋은 상대' },
+  { name: '보통',        pps: 1.35, mistake: 0.05, blurb: '꾸준히 공격을 보냅니다' },
+  { name: '어려움',      pps: 1.90, mistake: 0.02, blurb: '빈틈을 거의 만들지 않습니다' },
+  { name: '매우 어려움', pps: 2.60, mistake: 0.00, blurb: '실수하지 않습니다' }
 ];
 
 var AI = (function () {

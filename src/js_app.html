@@ -79,7 +79,6 @@ var App = (function () {
     U.countUp(trNode, Math.round(p.tr), { from: shownTr, ms: shownTr ? 700 : 1200 });
     U.$('#me-record').textContent = p.wins + 'W ' + p.losses + 'L';
     U.paintRankBadge(U.$('#me-rank'), p.rank, p.rankColor);
-    U.$('#ranked-tr').textContent = Math.round(p.tr).toLocaleString();
 
     U.$('#me-apm').textContent = U.fmtNum(p.apm, 1);
     U.$('#me-pps').textContent = U.fmtNum(p.pps, 2);
@@ -90,16 +89,16 @@ var App = (function () {
 
     U.$('#solo-sprint-best').textContent = p.sprintBest ? U.fmtTimeMs(p.sprintBest) : '—';
     U.$('#solo-blitz-best').textContent = p.blitzBest ? p.blitzBest.toLocaleString() : '—';
+    U.$('#menu-solo-best').textContent = p.sprintBest ? U.fmtTimeMs(p.sprintBest) : '—';
 
     var placement = U.$('#me-placement');
     if (p.placementsLeft > 0) {
-      placement.textContent = '배치 경기 ' + (10 - p.placementsLeft) + '/10 — ' +
-        p.placementsLeft + '경기 더 치르면 랭크가 부여됩니다.';
+      placement.textContent = '배치 ' + (10 - p.placementsLeft) + '/10 · ' +
+        p.placementsLeft + '경기 남음';
     } else {
       var streak = Number(p.streak) || 0;
-      placement.textContent = '최고 랭크 ' + (p.bestRank || p.rank) +
-        ' · ' + (streak >= 0 ? streak + '연승' : (-streak) + '연패') +
-        ' · 최고 TR ' + Math.round(p.peakTr).toLocaleString();
+      placement.textContent = (streak >= 0 ? streak + '연승' : (-streak) + '연패') +
+        ' · 최고 ' + (p.bestRank || p.rank) + ' ' + Math.round(p.peakTr).toLocaleString();
     }
 
     var nameField = U.$('#cfg-name');
@@ -391,10 +390,11 @@ var App = (function () {
     AI.levels.forEach(function (lv, i) {
       var btn = U.el('div', {
         class: 'menu-item',
-        style: '--item-color:' + ['#46d17f', '#8fd14b', '#ffd24d', '#ff8a3d', '#ff4d6a'][i],
-        html: '<div class="menu-icon">' + (i + 1) + '</div>' +
-              '<div class="menu-text"><div class="menu-title" style="font-size:18px">' + lv.name + '</div>' +
-              '<div class="menu-desc">' + lv.pps.toFixed(2) + ' PPS 목표</div></div>'
+        html: '<span class="menu-index">LV' + (i + 1) + '</span>' +
+              '<div class="menu-text"><div class="menu-title">' + lv.name + '</div>' +
+              '<div class="menu-desc">' + lv.blurb + '</div></div>' +
+              '<div class="menu-meta"><span class="k">Target</span>' +
+              lv.pps.toFixed(2) + ' pps</div>'
       });
       btn.addEventListener('click', function () {
         CONFIG.cpuLevel = i + 1;
@@ -566,7 +566,7 @@ var App = (function () {
     Net.roomList().then(function (res) {
       U.clear(host);
       if (!res.rooms.length) {
-        host.appendChild(U.el('p', { class: 'hint', text: '공개된 방이 없습니다. 직접 만들어 보세요.' }));
+        host.appendChild(U.el('div', { class: 'empty', text: '공개된 방이 없습니다 — 직접 만들어 보세요' }));
         return;
       }
       res.rooms.forEach(function (r) {
@@ -574,15 +574,14 @@ var App = (function () {
         var full = r.players >= r.max;
         var node = U.el('div', {
           class: 'menu-item',
-          style: '--item-color:' + (live ? '#46d17f' : '#b455e5'),
-          html: '<div class="menu-icon">' + U.escapeHtml(r.code.slice(0, 2)) + '</div>' +
-                '<div class="menu-text"><div class="menu-title" style="font-size:18px">' +
+          html: '<span class="menu-index mono-code">' + U.escapeHtml(r.code) + '</span>' +
+                '<div class="menu-text"><div class="menu-title">' +
                 U.escapeHtml(r.name) + '</div><div class="menu-desc">' +
                 'FT' + r.ft + ' · ' + (RULE_META.targeting.names[r.targeting] || r.targeting) +
                 ' · ' + (live ? '경기 중' : '대기 중') +
                 (r.spectators ? ' · 관전 ' + r.spectators + '명' : '') + '</div></div>' +
-                '<div class="menu-meta">' + r.players + '/' + r.max +
-                '<br><span class="faint">' + (live || full ? '관전으로 입장' : '참가') + '</span></div>'
+                '<div class="menu-meta"><span class="k">Seats</span>' +
+                r.players + '/' + r.max + '</div>'
         });
         node.addEventListener('click', function () {
           Net.roomJoin(r.code, live || full).then(function (res2) {
@@ -928,6 +927,7 @@ var App = (function () {
     U.$('#h-arr').textContent = CONFIG.arr;
     U.$('#h-sdf').textContent = CONFIG.sdf >= 41 ? '∞' : CONFIG.sdf;
     U.$('#cfg-cpu').textContent = CONFIG.cpuLevel;
+    U.$('#menu-cpu-level').textContent = CONFIG.cpuLevel;
     U.$('#cfg-cpu-desc').textContent = AI.levels[CONFIG.cpuLevel - 1].name;
     U.$('#cfg-ft').textContent = pendingRoomConfig.ft;
     U.$('#cfg-max').textContent = pendingRoomConfig.maxPlayers;

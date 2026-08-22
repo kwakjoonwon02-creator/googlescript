@@ -171,7 +171,8 @@ var U = (function () {
     var c = color || (window.RANK_COLORS && window.RANK_COLORS[rankName]) || '#666B7A';
     node.style.background = c;
     node.style.color = pickTextColor(c);
-    node.style.boxShadow = 'inset 0 0 0 2px rgba(255,255,255,0.16), 0 0 20px -6px ' + c;
+    // No glow: a rank is a fact, not a light source.
+    node.style.boxShadow = 'inset 0 0 0 1px rgba(255,255,255,0.14)';
   }
 
   function pickTextColor(hex) {

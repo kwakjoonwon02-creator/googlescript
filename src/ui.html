@@ -64,65 +64,77 @@
   <section class="screen" id="screen-menu">
     <div class="topbar">
       <div class="topbar-left">
-        <div class="identity" id="identity">
-          <div class="rank-badge" id="me-rank">Z</div>
-          <div>
-            <div class="identity-name" id="me-name">—</div>
-            <div class="identity-sub"><span id="me-tr">0</span> TR · <span id="me-record">0W 0L</span></div>
-          </div>
-        </div>
+        <span class="wordmark">TETRA<span class="dot">.</span>GS</span>
       </div>
-      <div class="row">
-        <button class="btn ghost sm" id="btn-config">설정</button>
-        <button class="btn ghost sm" id="btn-about">도움말</button>
+      <div class="row" style="align-items:center;gap:22px">
+        <div class="identity" id="identity">
+          <span class="identity-name" id="me-name">—</span>
+          <span class="identity-edit">닉네임 변경</span>
+        </div>
+        <div class="row">
+          <button class="btn ghost sm" id="btn-config">설정</button>
+          <button class="btn ghost sm" id="btn-about">도움말</button>
+        </div>
       </div>
     </div>
 
     <div class="row grow menu-columns">
       <div class="menu-column">
-        <p class="kicker">Select a mode</p>
-        <h1 class="title-xl" style="margin-bottom:22px">TETRA<span class="dot">.</span>GS</h1>
+
+        <!-- Ranked is the point of the app, so it is the only thing on this
+             screen with any size to it. The rest is a list. -->
+        <div class="hero" data-nav="ranked">
+          <div class="hero-line">
+            <p class="kicker">Ranked · first to 3</p>
+            <h1 class="hero-title">경쟁</h1>
+            <p class="hero-desc">비슷한 TR의 상대와 맞붙고, 결과에 따라 레이팅이 오르내립니다.</p>
+          </div>
+          <div class="hero-rating">
+            <div class="rank-badge lg" id="me-rank">Z</div>
+            <div class="hero-figure">
+              <span id="me-tr">0</span><em>TR</em>
+            </div>
+            <p class="hero-note" id="me-placement"></p>
+          </div>
+          <button class="btn primary lg hero-go" tabindex="-1">상대 찾기</button>
+        </div>
+
         <div class="menu-list">
 
-          <div class="menu-item" data-nav="solo" style="--item-color:#4dd6ff">
-            <div class="menu-icon">S</div>
+          <div class="menu-item" data-nav="solo">
+            <span class="menu-index">01</span>
             <div class="menu-text">
               <div class="menu-title">Solo</div>
               <div class="menu-desc">40 LINES · BLITZ · ZEN — 혼자 기록에 도전합니다</div>
             </div>
+            <div class="menu-meta"><span class="k">Best</span><span id="menu-solo-best">—</span></div>
           </div>
 
-          <div class="menu-item" data-nav="ranked" style="--item-color:#ff8a3d">
-            <div class="menu-icon">R</div>
-            <div class="menu-text">
-              <div class="menu-title">Ranked</div>
-              <div class="menu-desc">경쟁 모드 · FT3 · 승패에 따라 TR이 변동됩니다</div>
-            </div>
-            <div class="menu-meta" id="ranked-meta">TR <span id="ranked-tr">0</span></div>
-          </div>
-
-          <div class="menu-item" data-nav="multi" style="--item-color:#b455e5">
-            <div class="menu-icon">M</div>
+          <div class="menu-item" data-nav="multi">
+            <span class="menu-index">02</span>
             <div class="menu-text">
               <div class="menu-title">Multiplayer</div>
               <div class="menu-desc">방을 만들거나 코드로 참가 — 친구와 자유 대전</div>
             </div>
+            <div class="menu-meta"><span class="k">Players</span>2–4</div>
           </div>
 
-          <div class="menu-item" data-nav="cpu" style="--item-color:#46d17f">
-            <div class="menu-icon">C</div>
+          <div class="menu-item" data-nav="cpu">
+            <span class="menu-index">03</span>
             <div class="menu-text">
               <div class="menu-title">VS CPU</div>
               <div class="menu-desc">봇과 1:1 연습 — 난이도 5단계</div>
             </div>
+            <div class="menu-meta"><span class="k">Level</span><span id="menu-cpu-level">3</span></div>
           </div>
 
-          <div class="menu-item" data-nav="leaderboard" style="--item-color:#ffd24d">
-            <div class="menu-icon">L</div>
+          <div class="menu-item" data-nav="leaderboard">
+            <span class="menu-index">04</span>
             <div class="menu-text">
               <div class="menu-title">Leaderboard</div>
               <div class="menu-desc">TR 랭킹 · 스프린트 · 블리츠 기록</div>
             </div>
+            <div class="menu-meta"><span class="k">Top</span>100</div>
           </div>
 
         </div>
@@ -130,7 +142,7 @@
 
       <div class="side-column">
         <div class="panel">
-          <div class="panel-title">내 전적</div>
+          <div class="panel-title">내 전적 <span class="count" id="me-record">0W 0L</span></div>
           <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-top:0">
             <div class="stat-cell"><div class="k">APM</div><div class="v" id="me-apm">0.0</div></div>
             <div class="stat-cell"><div class="k">PPS</div><div class="v" id="me-pps">0.00</div></div>
@@ -139,7 +151,6 @@
             <div class="stat-cell"><div class="k">Blitz</div><div class="v" id="me-blitz">—</div></div>
             <div class="stat-cell"><div class="k">Peak</div><div class="v" id="me-peak">—</div></div>
           </div>
-          <div class="hint center" id="me-placement" style="margin-top:14px"></div>
         </div>
 
         <div class="panel grow" style="display:flex;flex-direction:column;min-height:0">
@@ -160,29 +171,30 @@
         <h2 class="title-lg">Solo</h2>
       </div>
     </div>
-    <div class="menu-list">
-      <div class="menu-item" data-solo="sprint" style="--item-color:#4dd6ff">
-        <div class="menu-icon">40</div>
+    <div class="menu-list board-measure">
+      <div class="menu-item" data-solo="sprint">
+        <span class="menu-index">01</span>
         <div class="menu-text">
           <div class="menu-title">40 Lines</div>
           <div class="menu-desc">40줄을 가장 빠르게 지우세요</div>
         </div>
-        <div class="menu-meta">BEST<br><span id="solo-sprint-best">—</span></div>
+        <div class="menu-meta"><span class="k">BEST</span><span id="solo-sprint-best">—</span></div>
       </div>
-      <div class="menu-item" data-solo="blitz" style="--item-color:#ffd24d">
-        <div class="menu-icon">2M</div>
+      <div class="menu-item" data-solo="blitz">
+        <span class="menu-index">02</span>
         <div class="menu-text">
           <div class="menu-title">Blitz</div>
-          <div class="menu-desc">2분 동안 최대 점수를 노리세요 (레벨이 오를수록 중력 상승)</div>
+          <div class="menu-desc">2분 동안 최대 점수를 노리세요 — 레벨이 오를수록 중력이 붙습니다</div>
         </div>
-        <div class="menu-meta">BEST<br><span id="solo-blitz-best">—</span></div>
+        <div class="menu-meta"><span class="k">BEST</span><span id="solo-blitz-best">—</span></div>
       </div>
-      <div class="menu-item" data-solo="zen" style="--item-color:#46d17f">
-        <div class="menu-icon">∞</div>
+      <div class="menu-item" data-solo="zen">
+        <span class="menu-index">03</span>
         <div class="menu-text">
           <div class="menu-title">Zen</div>
           <div class="menu-desc">끝나지 않는 연습 모드 — 탑아웃 없음</div>
         </div>
+        <div class="menu-meta"><span class="k">No limit</span>∞</div>
       </div>
     </div>
   </section>
@@ -308,12 +320,18 @@
       </div>
     </div>
     <div class="queue-box">
-      <div class="queue-spinner"></div>
-      <h3 class="title-lg" id="queue-title">상대를 찾는 중…</h3>
+      <h3 class="queue-title" id="queue-title">상대를 찾는 중…</h3>
       <p class="subtitle" id="queue-sub">비슷한 실력의 플레이어를 매칭합니다</p>
-      <p class="queue-stat">경과 <span id="queue-elapsed">0.0</span>초 · 대기열 <span id="queue-count">0</span>명</p>
-      <p class="queue-stat">허용 TR 폭 ±<span id="queue-band">800</span></p>
-      <button class="btn danger" id="btn-cancel-queue" style="margin-top:28px">취소</button>
+      <!-- Seven cells, dealt one at a time: the bag the pieces come out of. -->
+      <div class="queue-spinner" aria-hidden="true">
+        <i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+      </div>
+      <div class="queue-figures">
+        <div><span class="k">Elapsed</span><b><span id="queue-elapsed">0.0</span>s</b></div>
+        <div><span class="k">In queue</span><b id="queue-count">0</b></div>
+        <div><span class="k">TR band</span><b>±<span id="queue-band">800</span></b></div>
+      </div>
+      <button class="btn danger" id="btn-cancel-queue">취소</button>
     </div>
   </section>
 
