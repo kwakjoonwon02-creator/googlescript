@@ -48,7 +48,46 @@ var CONFIG = Object.assign({
 }, U.load('config', {}));
 CONFIG.binds = Object.assign({}, DEFAULT_BINDS, CONFIG.binds || {});
 
-function saveConfig() { U.save('config', CONFIG); }
+/**
+ * Settings belong to the account, but they have to survive being offline and
+ * they have to feel instant, so the browser copy is written on every change
+ * and the account copy follows a moment later. Every stepper, toggle and
+ * rebind already funnels through here, so this is the only place that needs
+ * to know.
+ */
+var CONFIG_PUSH_MS = 1200;
+var configPushTimer = null;
+
+function saveConfig() {
+  U.save('config', CONFIG);
+  clearTimeout(configPushTimer);
+  configPushTimer = setTimeout(pushConfig, CONFIG_PUSH_MS);
+}
+
+/** Sends the account copy now. Safe to call when nobody is signed in. */
+function pushConfig() {
+  clearTimeout(configPushTimer);
+  configPushTimer = null;
+  if (typeof Net === 'undefined' || !Net.creds()) return;
+  // A failed save is not worth interrupting anybody over: the browser copy
+  // is already written, and the next change tries again.
+  Net.saveSettings(CONFIG).catch(function () {});
+}
+
+/**
+ * Adopts the account's settings, or — for an account that has never saved
+ * any — offers up whatever this browser was already using. That second case
+ * is what carries a guest's handling through registering.
+ */
+function adoptConfig(settings) {
+  if (!settings) { pushConfig(); return; }
+  Object.keys(settings).forEach(function (key) {
+    if (key === 'binds') return;
+    CONFIG[key] = settings[key];
+  });
+  CONFIG.binds = Object.assign({}, DEFAULT_BINDS, settings.binds || {});
+  U.save('config', CONFIG);
+}
 
 var Input = (function () {
   var handler = null;          // set by the game while a match is running

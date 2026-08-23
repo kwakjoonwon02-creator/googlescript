@@ -145,6 +145,110 @@ t('a name cannot be registered twice', () => {
   eq(s.rpc('register', { name: 'x', password: 'hunter2!' }).ok, false, 'short name');
 });
 
+section('settings');
+
+const HANDLING = {
+  das: 83, arr: 0, sdf: 41, ghost: false, grid: true, shake: false,
+  effects: true, transitions: false, sound: true, cpuLevel: 5,
+  binds: { left: 'KeyJ', right: 'KeyL', hardDrop: 'Space' }
+};
+
+t('settings are handed back with the next session', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha');
+  eq(ok(s.rpc('bootstrap', { id: a.id, token: a.token })).settings, null,
+     'a new account should report no settings, not defaults');
+
+  ok(s.rpc('saveSettings', { id: a.id, token: a.token, settings: HANDLING }));
+
+  const back = ok(s.rpc('bootstrap', { id: a.id, token: a.token })).settings;
+  eq(back.das, 83, 'DAS');
+  eq(back.ghost, false, 'a false toggle must survive');
+  eq(back.cpuLevel, 5, 'CPU level');
+  eq(back.binds.left, 'KeyJ', 'rebound key');
+});
+
+t('signing in on another device restores them', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha', 'correct horse');
+  ok(s.rpc('saveSettings', { id: a.id, token: a.token, settings: HANDLING }));
+  // A different browser: no stored credentials, just the name and password.
+  const fresh = ok(s.rpc('login', { name: 'Alpha', password: 'correct horse' }));
+  eq(fresh.settings.das, 83, 'DAS did not follow the account');
+  eq(fresh.settings.binds.right, 'KeyL', 'keybinds did not follow the account');
+});
+
+t('one account cannot see or set another\'s', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo');
+  ok(s.rpc('saveSettings', { id: a.id, token: a.token, settings: HANDLING }));
+  eq(ok(s.rpc('bootstrap', { id: b.id, token: b.token })).settings, null, 'leaked into another account');
+  eq(s.rpc('saveSettings', { id: a.id, token: 'forged', settings: HANDLING }).ok, false, 'forged token');
+});
+
+t('values are clamped and unknown keys are dropped', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha');
+  const kept = ok(s.rpc('saveSettings', {
+    id: a.id, token: a.token,
+    settings: { das: 99999, arr: -40, sdf: 0, cpuLevel: 12, ghost: 'yes', evil: '<script>', binds: {} }
+  })).settings;
+  eq(kept.das, 300, 'DAS clamped to its ceiling');
+  eq(kept.arr, 0, 'ARR clamped to its floor');
+  eq(kept.sdf, 1, 'SDF clamped to its floor');
+  eq(kept.cpuLevel, 5, 'CPU level clamped');
+  eq(kept.ghost, true, 'a truthy string is a true toggle');
+  eq(kept.evil, undefined, 'an unknown key was stored');
+  eq(JSON.stringify(kept.binds), '{}', 'binds');
+});
+
+t('a nonsense keybind is dropped rather than stored', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha');
+  const kept = ok(s.rpc('saveSettings', {
+    id: a.id, token: a.token,
+    settings: { binds: {
+      left: 'KeyJ',
+      right: 'x'.repeat(400),
+      hold: { nope: true },
+      fly: 'KeyF'
+    } }
+  })).settings;
+  eq(kept.binds.left, 'KeyJ', 'a valid bind should survive');
+  eq(kept.binds.right, undefined, 'an over-long code was stored');
+  eq(kept.binds.hold, undefined, 'a non-string code was stored');
+  eq(kept.binds.fly, undefined, 'an unknown action was stored');
+});
+
+t('garbage in the column reads as no settings, not as an error', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha');
+  const row = s.Store_readAll('Players')[0];
+  s.Store_writeRow('Players', row._row, Object.assign(row, { settings: '{not json' }));
+  s.__evict('player:');
+  eq(ok(s.rpc('bootstrap', { id: a.id, token: a.token })).settings, null, 'should fall back cleanly');
+});
+
+t('a guest keeps their settings through becoming an account', () => {
+  const s = makeSandbox();
+  const g = newGuest(s);
+  ok(s.rpc('saveSettings', { id: g.id, token: g.token, settings: HANDLING }));
+  ok(s.rpc('setPassword', { id: g.id, token: g.token, name: 'Charlie', password: 'hunter2!' }));
+  const back = ok(s.rpc('login', { name: 'Charlie', password: 'hunter2!' }));
+  eq(back.settings.das, 83, 'handling was lost in the upgrade');
+});
+
+t('an account from before settings existed still signs in', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha');
+  const row = s.Store_readAll('Players')[0];
+  s.Store_writeRow('Players', row._row, Object.assign(row, { settings: '' }));
+  s.__evict('player:');
+  const session = ok(s.rpc('bootstrap', { id: a.id, token: a.token }));
+  eq(session.authed, true, 'the session broke');
+  eq(session.settings, null, 'an empty column is no settings');
+});
+
 section('guests');
 t('a guest can play, but not ranked', () => {
   const s = makeSandbox();

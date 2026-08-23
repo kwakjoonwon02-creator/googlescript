@@ -652,6 +652,68 @@ const { testAsync: t, assert, eq, section, note, finish } = require('./lib/repor
       () => document.querySelector('#me-sprint').textContent !== '—', null, { timeout: 8000 });
   });
 
+  await t('settings follow the account, not the browser', async () => {
+    // Tune the handling and rebind a key the way a person would.
+    await page.click('#btn-config');
+    await page.waitForSelector('#screen-config.active');
+    for (let i = 0; i < 4; i++) await page.click('[data-handling="das"][data-delta="-5"]');
+    await page.click('[data-toggle="ghost"]');
+    await page.click('[data-bind="hold"] .kbd');
+    await page.keyboard.press('KeyV');
+    await page.waitForTimeout(120);
+    const tuned = await page.evaluate(() => ({
+      das: CONFIG.das, ghost: CONFIG.ghost, hold: CONFIG.binds.hold
+    }));
+    eq(tuned.das, 80, 'DAS did not move');
+    eq(tuned.ghost, false, 'ghost did not toggle off');
+    eq(tuned.hold, 'KeyV', 'hold was not rebound');
+
+    // Leaving the settings screen flushes the debounce.
+    await page.click('#screen-config [data-nav="menu"]');
+    await page.waitForSelector('#screen-menu.active');
+    await page.waitForFunction(() => {
+      const rows = Store_readAll('Players');
+      return rows.some(p => p.name === 'Tester' && /"das":80/.test(String(p.settings)));
+    }, null, { timeout: 8000 });
+
+    // A different browser: sign out, wipe what the device remembers, and
+    // come back with nothing but the name and the password.
+    await page.click('#btn-config');
+    await page.click('#btn-logout');
+    await page.waitForSelector('#screen-auth.active', { timeout: 8000 });
+    await page.evaluate(() => {
+      U.save('config', {});
+      CONFIG.das = 100; CONFIG.ghost = true;
+      CONFIG.binds = Object.assign({}, DEFAULT_BINDS);
+    });
+
+    await page.click('[data-auth-tab="login"]');
+    await page.fill('#auth-name', 'Tester');
+    await page.fill('#auth-pw', 'hunter2!');
+    await page.click('#auth-submit');
+    await page.waitForSelector('#screen-menu.active', { timeout: 10000 });
+
+    const restored = await page.evaluate(() => ({
+      das: CONFIG.das, ghost: CONFIG.ghost, hold: CONFIG.binds.hold,
+      // An action nobody rebound must still come back from the client's own
+      // defaults rather than as undefined.
+      left: CONFIG.binds.left
+    }));
+    eq(restored.das, 80, 'DAS did not come back');
+    eq(restored.ghost, false, 'the toggle did not come back');
+    eq(restored.hold, 'KeyV', 'the rebound key did not come back');
+    eq(restored.left, 'ArrowLeft', 'an untouched bind lost its default');
+
+    // ...and the settings screen shows what was restored, not what the
+    // markup shipped with.
+    await page.click('#btn-config');
+    await page.waitForSelector('#screen-config.active');
+    eq(await page.textContent('#h-das'), '80', 'the DAS readout is stale');
+    eq(await page.textContent('[data-toggle="ghost"]'), 'OFF', 'the ghost toggle is stale');
+    await page.click('#screen-config [data-nav="menu"]');
+    await page.waitForSelector('#screen-menu.active');
+  });
+
   await t('a guest is turned away from ranked and offered an account', async () => {
     await page.click('#btn-config');
     await page.waitForSelector('#screen-config.active');

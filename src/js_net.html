@@ -120,6 +120,9 @@ var Net = (function () {
     guest: function () { return call('guest', {}).then(absorb); },
     logout: function () { return call('logout', authed({})).then(function (r) { forget(); return r; }); },
     setPassword: function (payload) { return call('setPassword', authed(payload)); },
+    saveSettings: function (settings) {
+      return call('saveSettings', authed({ settings: settings }));
+    },
     sync: sync,
     resetSyncGate: resetSyncGate,
     serverNow: serverNow,

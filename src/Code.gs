@@ -50,6 +50,7 @@ function rpcHandlers_() {
     guest: Api_guest,
     setPassword: Api_setPassword,
     setName: Api_setName,
+    saveSettings: Api_saveSettings,
     profile: Api_profile,
     submitSolo: Api_submitSolo,
     leaderboard: Api_leaderboard,

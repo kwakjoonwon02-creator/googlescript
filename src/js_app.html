@@ -61,6 +61,9 @@ var App = (function () {
     document.body.classList.toggle('in-game', name === 'game');
     // The board only has a measurable size once its screen is displayed.
     if (name === 'game') U.fitStage();
+    // Leaving the settings screen is the moment to stop waiting out the
+    // debounce and put the account's copy in step.
+    if (previous === 'config' && changed) pushConfig();
     // The wipe reads as a transition, not a flash, so it only runs when the
     // screen actually changed and never on the very first paint.
     if (changed && previous !== 'boot' && CONFIG.transitions) U.replay(U.$('#wipe'), 'run');
@@ -155,8 +158,10 @@ var App = (function () {
     });
   }
 
-  /** Signed in: fill everything the menu shows and go. */
+  /** Signed in: take the account's settings, fill the menu, and go. */
   function enterApp(data) {
+    adoptConfig(data.settings);
+    buildKeybindUI();
     updateProfile(data.profile);
     syncConfigUI();
     showScreen('menu');
@@ -922,6 +927,9 @@ var App = (function () {
       : '계정으로 로그인되어 있습니다. 닉네임이 곧 로그인 이름입니다.';
     U.$('#btn-password').textContent = guest ? '계정 만들기' : '비밀번호 변경';
     U.$('#btn-password').classList.toggle('primary', guest);
+    U.$('#cfg-sync-note').textContent = guest
+      ? '설정은 이 게스트 계정에 저장됩니다. 비밀번호를 등록하면 다른 기기에서도 그대로 이어집니다.'
+      : '핸들링·토글·키 설정은 계정에 저장되어 어느 기기에서 로그인하든 따라옵니다.';
 
     U.$('#h-das').textContent = CONFIG.das;
     U.$('#h-arr').textContent = CONFIG.arr;
@@ -999,7 +1007,7 @@ var App = (function () {
           buildKeybindUI();
         });
       });
-      host.appendChild(U.el('div', { class: 'keybind-row' }, [
+      host.appendChild(U.el('div', { class: 'keybind-row', 'data-bind': action }, [
         U.el('span', { text: Input.labels[action] }), key
       ]));
     });

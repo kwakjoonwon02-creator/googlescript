@@ -118,7 +118,8 @@ function Accounts_session_(player) {
   Players_save(player);
   return {
     credentials: { id: player.id, token: player.token },
-    profile: Players_publicView(player)
+    profile: Players_publicView(player),
+    settings: Settings_load(player)
   };
 }
 

@@ -69,7 +69,8 @@ function Players_create_(name) {
     apm: 0, pps: 0, vs: 0,
     sprintBest: 0, blitzBest: 0,
     totalLines: 0, totalPieces: 0,
-    pwHash: '', pwSalt: '', guest: false
+    pwHash: '', pwSalt: '', guest: false,
+    settings: ''
   };
   player._row = Store_appendRow('Players', player);
   Store_cachePut(Players_cacheKey_(player.id), player, STORE.PLAYER_CACHE_TTL);
@@ -160,6 +161,8 @@ function Api_bootstrap(payload) {
     authed: true,
     credentials: { id: player.id, token: player.token },
     profile: Players_publicView(player),
+    // null when the account has never saved any; see Settings_load.
+    settings: Settings_load(player),
     isNew: Number(player.games) === 0 && Number(player.totalPieces) === 0
   });
 }

@@ -23,8 +23,9 @@ var STORE = {
       'games', 'wins', 'losses', 'roundsWon', 'roundsLost', 'streak', 'bestStreak',
       'apm', 'pps', 'vs', 'sprintBest', 'blitzBest', 'totalLines', 'totalPieces',
       // Appended, never inserted: an older sheet keeps its rows lined up and
-      // only picks up blanks here, which read as an account with no password.
-      'pwHash', 'pwSalt', 'guest'
+      // only picks up blanks here, which read as an account with no password
+      // and no saved settings.
+      'pwHash', 'pwSalt', 'guest', 'settings'
     ],
     Matches: [
       'id', 'ts', 'mode', 'p1', 'p1name', 'p2', 'p2name',
