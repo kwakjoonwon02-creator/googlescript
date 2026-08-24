@@ -373,6 +373,117 @@ t('leaving the queue removes the entry', () => {
   eq(rb.matched, false, 'should not match a player who left');
 });
 
+section('one player, one ranked match');
+
+/* Every one of these is a way the same player ended up committed to two
+   ranked rooms at once — which from the other side looks like being matched
+   against somebody who never turns up. */
+
+t('a slow poller collects the match they already have', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo'), c = newPlayer(s, 'Charlie');
+
+  ok(s.rpc('queueJoin', { id: a.id, token: a.token }));
+  const paired = ok(s.rpc('queueJoin', { id: b.id, token: b.token }));
+  eq(paired.matched, true, 'Bravo should pair with Alpha');
+
+  // Alpha has not polled since joining. Their entry is older than a waiting
+  // entry is allowed to be, but it is a matched entry, so it stands.
+  s.__clock.advance(20000);
+  ok(s.rpc('queueJoin', { id: c.id, token: c.token }));
+
+  const mine = ok(s.rpc('queuePoll', { id: a.id, token: a.token }));
+  eq(mine.matched, true, 'Alpha was never told about their own match');
+  eq(mine.room.code, paired.room.code, 'Alpha was sent to a different room than Bravo');
+
+  const room = s.Rooms_load(paired.room.code);
+  eq(room.players.length, 2, 'the ranked room does not hold exactly two');
+  eq(ok(s.rpc('queuePoll', { id: c.id, token: c.token })).matched, false, 'Charlie should still be waiting');
+});
+
+t('...even when the cache has lost the seat it was holding', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo'), c = newPlayer(s, 'Charlie');
+  ok(s.rpc('queueJoin', { id: a.id, token: a.token }));
+  const paired = ok(s.rpc('queueJoin', { id: b.id, token: b.token }));
+
+  // The seat key is the belt; the queue entry is the braces. Drop the belt.
+  assert(s.__evict('mm:seat:') > 0, 'expected seat keys to evict');
+  s.__clock.advance(20000);
+  ok(s.rpc('queueJoin', { id: c.id, token: c.token }));
+
+  const mine = ok(s.rpc('queuePoll', { id: a.id, token: a.token }));
+  eq(mine.matched, true, 'Alpha lost the match they had been given');
+  eq(mine.room.code, paired.room.code, 'Alpha was paired a second time, into a second room');
+});
+
+t('pressing ranked again during a match returns the same room', () => {
+  const s = makeSandbox();
+  const { a, code } = pairUp(s);
+  // A reload, a lost response, or an impatient second press.
+  const again = ok(s.rpc('queueJoin', { id: a.id, token: a.token }));
+  eq(again.matched, true, 'should be handed the match already in progress');
+  eq(again.room.code, code, 'a second room was created');
+  eq(s.Store_readAll('Rooms').filter(r => r.mode === 'ranked').length, 1, 'more than one ranked room exists');
+});
+
+t('cancelling really cancels', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo');
+  ok(s.rpc('queueJoin', { id: a.id, token: a.token }));
+  ok(s.rpc('queueJoin', { id: b.id, token: b.token }));
+
+  // Alpha presses cancel in the moment between being paired and hearing so.
+  ok(s.rpc('queueLeave', { id: a.id, token: a.token }));
+  ok(s.rpc('roomLeave', { id: a.id, token: a.token, code: s.Store_readAll('Rooms')[0].code }));
+
+  const fresh = ok(s.rpc('queueJoin', { id: a.id, token: a.token }));
+  eq(fresh.matched, false, 'a cancelled player was dragged back into the match');
+});
+
+t('a finished match does not trap you in it', () => {
+  const s = makeSandbox();
+  const { a, b, code } = pairUp(s);
+  const res = playMatch(s, a, b, code, 3, 0);
+  eq(res.room.state, 'matchover', 'match should be over');
+
+  // Play again: the old room is finished, so this is a new search.
+  const next = ok(s.rpc('queueJoin', { id: a.id, token: a.token }));
+  eq(next.matched, false, 'was handed the match that just ended');
+});
+
+t('nobody is ever handed a room they are not seated in', () => {
+  const s = makeSandbox();
+  const players = [];
+  for (let i = 0; i < 6; i++) players.push(newPlayer(s, 'P' + i));
+
+  // Join staggered, then poll on a slow, uneven timer — the shape that
+  // produced the double booking.
+  players.forEach(p => { s.__clock.advance(8000); ok(s.rpc('queueJoin', { id: p.id, token: p.token })); });
+  const seen = new Map();
+  for (let tick = 0; tick < 8; tick++) {
+    s.__clock.advance(9000);
+    players.forEach(p => {
+      if (seen.has(p.id)) return;
+      const r = ok(s.rpc('queuePoll', { id: p.id, token: p.token }));
+      if (r.matched) seen.set(p.id, r.room.code);
+    });
+  }
+
+  const byRoom = {};
+  seen.forEach((code, id) => { (byRoom[code] = byRoom[code] || []).push(id); });
+  Object.keys(byRoom).forEach(code => {
+    const room = s.Rooms_load(code);
+    eq(room.players.length, 2, code + ' holds ' + room.players.length + ' players');
+    eq(byRoom[code].length, 2, code + ' was handed to ' + byRoom[code].length + ' clients');
+    room.players.forEach(seat => {
+      assert(byRoom[code].indexOf(seat.id) !== -1,
+        code + ' seats somebody who was told about a different room');
+    });
+  });
+  note(Object.keys(byRoom).length + ' rooms, ' + seen.size + ' of 6 matched');
+});
+
 section('room state machine');
 function pairUp(s) {
   const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo');

@@ -250,6 +250,41 @@ const { testAsync: t, assert, eq, section, note, finish } = require('./lib/repor
     assert(h && parseFloat(h) > 0, 'meter empty: ' + h);
   });
 
+  await t('the well has walls you can see without looking for them', async () => {
+    // The playfield is the one thing on screen you navigate by feel. A
+    // hairline that disappears into the background is how you lose track of
+    // which column you are over.
+    const frame = await page.evaluate(() => {
+      const page = getComputedStyle(document.body).backgroundColor;
+      const parse = css => (css.match(/[\d.]+/g) || [0, 0, 0]).map(Number);
+      const lum = (rgba, under) => {
+        const [r, g, b, a = 1] = parse(rgba);
+        const [br, bg, bb] = parse(under);
+        const mix = [r * a + br * (1 - a), g * a + bg * (1 - a), b * a + bb * (1 - a)];
+        const lin = mix.map(v => {
+          const c = v / 255;
+          return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+      };
+      const el = document.querySelector('.board-frame');
+      const cs = getComputedStyle(el);
+      const inside = lum(cs.backgroundColor, page);
+      return {
+        wall: parseFloat(cs.borderLeftWidth),
+        floor: parseFloat(cs.borderBottomWidth),
+        wallContrast: (lum(cs.borderLeftColor, page) + 0.05) / (inside + 0.05),
+        floorContrast: (lum(cs.borderBottomColor, page) + 0.05) / (inside + 0.05)
+      };
+    });
+    note('wall ' + frame.wall + 'px ×' + frame.wallContrast.toFixed(1) +
+         ' · floor ' + frame.floor + 'px ×' + frame.floorContrast.toFixed(1));
+    assert(frame.wall >= 2, 'the side walls are ' + frame.wall + 'px');
+    assert(frame.floor >= 2, 'the floor is ' + frame.floor + 'px');
+    assert(frame.wallContrast >= 3, 'the walls sit at ' + frame.wallContrast.toFixed(1) + ':1 against the field');
+    assert(frame.floorContrast >= frame.wallContrast, 'the floor should read at least as strongly as the walls');
+  });
+
   await t('escape leaves the CPU match', async () => {
     await page.keyboard.press('Escape');
     await page.waitForSelector('#screen-menu.active', { timeout: 5000 });

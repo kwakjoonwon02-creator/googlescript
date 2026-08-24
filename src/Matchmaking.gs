@@ -11,6 +11,10 @@ var MM = {
   QUEUE_TTL: 900,
   // Entries stop being refreshed the moment a client stops polling.
   STALE_MS: 12000,
+  // ...but an entry that has already been paired is a delivery receipt, not
+  // a heartbeat, and is kept until its owner has had a fair chance to
+  // collect it however slowly they are polling.
+  MATCHED_MS: 120000,
   BASE_BAND: 800,        // TR difference accepted immediately
   BAND_PER_SEC: 450,     // ...widened by this much for every second waited
   MAX_BAND: 30000,
@@ -25,8 +29,46 @@ function MM_write_(queue) {
   Store_cachePut(MM.QUEUE_KEY, queue, MM.QUEUE_TTL);
 }
 
+/**
+ * Drops entries whose owner has gone away.
+ *
+ * A waiting entry is judged by its last poll. A *matched* one is not: it is
+ * the only record that this player has an opponent, and dropping it because
+ * they were slow to poll meant they came back, found no entry of their own,
+ * were queued as if new, and were paired a second time — into a second room,
+ * while their first opponent sat waiting for somebody never coming.
+ */
 function MM_prune_(queue, now) {
-  return queue.filter(function (e) { return (now - Number(e.ts)) < MM.STALE_MS; });
+  return queue.filter(function (e) {
+    if (e.room) return (now - Number(e.matchedAt || e.ts)) < MM.MATCHED_MS;
+    return (now - Number(e.ts)) < MM.STALE_MS;
+  });
+}
+
+/**
+ * The room a player has already been committed to.
+ *
+ * Pairing writes this, so a client that reloaded, lost its response or
+ * pressed Ranked again lands back in the match it already has instead of
+ * queueing for a second one. It cleans up after itself: anything saying the
+ * commitment is over — room gone, seat gone, opponent gone, match finished —
+ * drops the key on the way past.
+ */
+function MM_seatKey_(playerId) { return 'mm:seat:' + playerId; }
+
+function MM_currentRoom_(playerId) {
+  var code = Store_cacheGet(MM_seatKey_(playerId));
+  if (!code) return null;
+  var room = Rooms_load(code);
+  var live = room &&
+    Rooms_playerIndex_(room, playerId) !== -1 &&
+    room.players.length >= 2 &&
+    room.state !== 'matchover';
+  if (!live) {
+    Store_cacheRemove(MM_seatKey_(playerId));
+    return null;
+  }
+  return room;
 }
 
 function MM_entryFor_(player, now) {
@@ -80,6 +122,10 @@ function MM_pair_(queue, now) {
 
     a.room = room.code;
     b.room = room.code;
+    a.matchedAt = now;
+    b.matchedAt = now;
+    Store_cachePut(MM_seatKey_(a.id), room.code, ROOMS.ROOM_TTL);
+    Store_cachePut(MM_seatKey_(b.id), room.code, ROOMS.ROOM_TTL);
     i++; // b is taken; skip past it
   }
   return queue;
@@ -96,6 +142,16 @@ function MM_pair_(queue, now) {
 function MM_enterAndResolve_(player, now) {
   return Store_withLock(6000, function () {
     var queue = MM_prune_(MM_read_(), now);
+
+    // Already committed to a match: hand that back rather than start a
+    // second search. Anything else double-books this player.
+    var committed = MM_currentRoom_(player.id);
+    if (committed) {
+      queue = queue.filter(function (e) { return String(e.id) !== String(player.id); });
+      MM_write_(queue);
+      return { queue: queue, room: committed, joinedAt: now };
+    }
+
     var mine = null;
     for (var i = 0; i < queue.length; i++) {
       if (String(queue[i].id) === String(player.id)) { mine = queue[i]; break; }
@@ -154,6 +210,9 @@ function MM_response_(value, playerId, now) {
 
 function Api_queueLeave(payload) {
   var player = Players_authenticate(payload);
+  // Cancelling means cancelling: if a match was found in the moment before
+  // the button was pressed, do not drag them back into it later.
+  Store_cacheRemove(MM_seatKey_(player.id));
   Store_withLock(6000, function () {
     var queue = MM_read_().filter(function (e) { return String(e.id) !== String(player.id); });
     MM_write_(queue);

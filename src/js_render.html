@@ -94,7 +94,7 @@ var Render = (function () {
     ctx.fillRect(0, 0, w, fieldTop);
 
     if (opts.grid !== false) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.055)';
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       for (var gx = 1; gx < BOARD_W; gx++) {
@@ -150,8 +150,9 @@ var Render = (function () {
       }
     }
 
-    // Field boundary line.
-    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    // The ceiling: everything above this line is the spawn buffer, and a
+    // piece resting on it means the next one has nowhere to go.
+    ctx.strokeStyle = 'rgba(255,255,255,0.34)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, fieldTop + 0.5);
