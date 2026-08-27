@@ -341,7 +341,15 @@ var Game = (function () {
     G.isOnline = false;
     G.room = null;
     G.roomCode = null;
-    if (code) Net.roomLeave(code).catch(function () {});
+    if (!code) return;
+    Net.roomLeave(code).then(function (res) {
+      // Walking out of a ranked match is settled as a loss. Say so here
+      // rather than let them notice their rating later and wonder.
+      if (!res || !res.forfeit) return;
+      var delta = Math.round(res.forfeit.trAfter - res.forfeit.trBefore);
+      U.toast('기권 패배 — TR ' + (delta >= 0 ? '+' : '') + delta.toLocaleString(), 'error', 5000);
+      App.refreshProfile();
+    }).catch(function () {});
   }
 
   /* --------------------------------------------------------------- loop */
@@ -803,6 +811,10 @@ var Game = (function () {
         var myId = Net.creds().id;
         var iWon = room.roundWinner === myId;
         var scores = room.players.map(function (p) { return p.wins; }).join(' — ');
+        // A round that ended because somebody stopped answering is not the
+        // same as one that ended on a top-out, and being told which is the
+        // difference between a result and a mystery.
+        if (room.roundByDrop) scores = (iWon ? '상대 연결 끊김' : '연결이 끊겼습니다') + ' · ' + scores;
         banner(iWon ? 'ROUND WIN' : (room.roundWinner ? 'ROUND LOSS' : 'DRAW'), scores);
         updateScoreStrip();
       }
@@ -1136,12 +1148,20 @@ var Game = (function () {
     var me = null, op = null;
     room.players.forEach(function (p) { if (p.id === myId) me = p; else if (!op) op = p; });
 
+    var forfeit = room.results && room.results.forfeit;
     var html = '<div class="subtitle center">' +
       (room.mode === 'ranked' ? 'RANKED · FT' + room.config.ft : 'CASUAL · FT' + room.config.ft) + '</div>' +
       '<div class="result-headline ' + (won ? 'win' : 'lose') + '" style="margin-top:12px">' +
       (won ? 'VICTORY' : 'DEFEAT') + '</div>' +
       '<div class="center mono" style="font-size:30px;margin-top:12px">' +
       (me ? me.wins : 0) + ' — ' + (op ? op.wins : 0) + '</div>';
+
+    // A win handed over by somebody walking out is not the same as one you
+    // played for, and the scoreline alone does not say which it was.
+    if (forfeit) {
+      html += '<p class="hint center" style="margin-top:10px">' +
+        (forfeit === myId ? '기권으로 패배했습니다.' : '상대가 경기 도중 나갔습니다.') + '</p>';
+    }
 
     var delta = room.results && room.results.delta && room.results.delta[myId];
     if (delta && room.results.ranked) {

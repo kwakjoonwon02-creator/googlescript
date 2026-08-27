@@ -137,6 +137,9 @@ const RUNNER_LOCAL = `
 <script>
 /* google.script.run, answered by the in-page copy of the server. */
 window.__rpcLog = [];
+/* Calls sent, counted as they leave rather than as they come back, so a
+   test can watch a request that is never answered. */
+window.__rpcSent = 0;
 window.google = { script: {} };
 Object.defineProperty(window.google.script, 'run', {
   get: function () {
@@ -145,6 +148,7 @@ Object.defineProperty(window.google.script, 'run', {
       withSuccessHandler: function (fn) { onSuccess = fn; return api; },
       withFailureHandler: function (fn) { onFailure = fn; return api; },
       rpc: function (method, payload) {
+        window.__rpcSent++;
         setTimeout(function () {
           var res;
           try { res = rpc(method, payload); }

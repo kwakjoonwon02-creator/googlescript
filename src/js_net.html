@@ -86,21 +86,44 @@ var Net = (function () {
 
   /* ---------------------------------------------------------- sync loop */
 
-  var syncInFlight = false;
+  // google.script.run can lose a response outright — no success handler, no
+  // failure handler, nothing comes back. A gate with no way out of it meant
+  // the client stopped publishing its board, and the server, hearing
+  // nothing, declared it dead: a match lost out of nowhere, and an opponent
+  // handed a win they did not play for. Nothing in flight is trusted past
+  // this deadline.
+  var SYNC_TIMEOUT_MS = 5000;
+  var syncSeq = 0;
+  var syncInFlight = 0;        // sequence number of the live call, 0 for none
+  var syncStartedAt = 0;
 
   /**
-   * One versus tick. Silently drops the call if the previous one has not
-   * come back yet, so a slow round trip cannot pile up requests.
+   * One versus tick. Drops the call while a previous one is still usefully
+   * in flight, so a slow round trip cannot pile up requests — but gives up
+   * on one that has stopped answering.
    */
   function sync(code, state, chatSince) {
-    if (syncInFlight) return Promise.resolve(null);
-    syncInFlight = true;
+    if (syncInFlight && (Date.now() - syncStartedAt) < SYNC_TIMEOUT_MS) return Promise.resolve(null);
+    var seq = ++syncSeq;
+    syncInFlight = seq;
+    syncStartedAt = Date.now();
+
+    var release = function () { if (syncInFlight === seq) syncInFlight = 0; };
     return call('sync', authed({ code: code, state: state, chatSince: chatSince || 0 }))
-      .then(function (data) { syncInFlight = false; return data; })
-      .catch(function (err) { syncInFlight = false; throw err; });
+      .then(function (data) {
+        release();
+        // A reply to a call we had already written off describes a room that
+        // has moved on; applying it would rewind the client.
+        return seq === syncSeq ? data : null;
+      })
+      .catch(function (err) {
+        release();
+        if (seq !== syncSeq) return null;
+        throw err;
+      });
   }
 
-  function resetSyncGate() { syncInFlight = false; }
+  function resetSyncGate() { syncInFlight = 0; syncSeq++; }
 
   function serverNow() { return Date.now() + serverOffset; }
 

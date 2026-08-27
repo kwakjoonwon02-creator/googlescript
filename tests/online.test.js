@@ -270,6 +270,83 @@ async function driveMatch(loser, winner, timeoutMs) {
     assert(/배치 경기 1\/10/.test(aText), 'placement line missing: ' + aText.slice(-200));
   });
 
+  section('walking out of a ranked match');
+
+  await t('a second ranked match starts between the same two', async () => {
+    for (const page of [A, B]) {
+      if (await page.isVisible('#screen-result.active')) await page.click('#btn-result-menu');
+      await page.waitForSelector('#screen-menu.active', { timeout: 15000 });
+    }
+    await A.click('[data-nav="ranked"]');
+    await A.waitForSelector('#screen-queue.active');
+    await B.click('[data-nav="ranked"]');
+    const inRanked = () => Game.state().room && Game.state().room.mode === 'ranked';
+    await A.waitForFunction(inRanked, null, { timeout: 30000 });
+    await B.waitForFunction(inRanked, null, { timeout: 30000 });
+    await A.waitForFunction(() => Game.state().phase === 'playing', null, { timeout: 40000 });
+    await B.waitForFunction(() => Game.state().phase === 'playing', null, { timeout: 40000 });
+  });
+
+  await t('quitting mid-match is refused until it is confirmed', async () => {
+    const before = await B.evaluate(() => App.profile().tr);
+    await B.keyboard.press('Escape');
+    await B.waitForSelector('#modal-host.open', { timeout: 8000 });
+    const warning = await B.textContent('#modal-body');
+    assert(/TR이 깎/.test(warning), 'the ranked penalty is not spelled out: ' + warning);
+
+    // Backing out costs nothing.
+    await B.click('#modal-body .btn.ghost');
+    await B.waitForSelector('#modal-host:not(.open)', { state: 'attached', timeout: 5000 });
+    eq(await B.evaluate(() => App.profile().tr), before, 'backing out of the dialog cost TR');
+    eq(await B.evaluate(() => Game.state().phase), 'playing', 'the match should still be running');
+  });
+
+  await t('quitting is a loss, and the other side is told why they won', async () => {
+    const before = await B.evaluate(() => App.profile().tr);
+    await B.keyboard.press('Escape');
+    await B.waitForSelector('#modal-host.open', { timeout: 8000 });
+    await B.click('#modal-body .btn.danger');
+
+    await B.waitForSelector('#screen-menu.active', { timeout: 15000 });
+    await B.waitForFunction(t0 => App.profile() && App.profile().tr < t0, before, { timeout: 20000 });
+    const after = await B.evaluate(() => App.profile());
+    note('quitter ' + before + ' -> ' + after.tr + ' TR');
+    eq(after.losses, 2, 'the walkout was not recorded as a loss');
+
+    // The player who stayed gets a result screen that says what happened.
+    await A.waitForSelector('#screen-result.active', { timeout: 30000 });
+    const card = await A.textContent('#result-card');
+    assert(/VICTORY/.test(card), 'the player who stayed did not win: ' + card.slice(0, 80));
+    assert(/상대가 경기 도중 나갔습니다/.test(card), 'the result does not say it was a walkout');
+    const delta = await A.evaluate(() => {
+      const n = document.querySelector('.tr-delta');
+      return n ? n.textContent.trim() : null;
+    });
+    assert(delta && /^\+/.test(delta), 'no TR was gained for the forfeit: ' + delta);
+  });
+
+  await t('cancelling the queue really leaves it', async () => {
+    await A.click('#btn-result-menu');
+    await A.waitForSelector('#screen-menu.active', { timeout: 15000 });
+    await A.click('[data-nav="ranked"]');
+    await A.waitForSelector('#screen-queue.active');
+    // Wait for at least one poll to be in flight or done, then cancel.
+    await A.waitForFunction(() => document.querySelector('#queue-elapsed').textContent !== '0.0',
+      null, { timeout: 10000 });
+    await A.click('#btn-cancel-queue');
+    await A.waitForSelector('#screen-menu.active', { timeout: 8000 });
+
+    // B now searches. If A were still queued they would be paired, and A
+    // would be dragged off the menu into a match they cancelled.
+    await B.click('[data-nav="ranked"]');
+    await B.waitForSelector('#screen-queue.active');
+    await B.waitForTimeout(6000);
+    eq(await A.evaluate(() => App.currentScreen()), 'menu', 'the cancelled client was pulled into a match');
+    eq(await B.evaluate(() => !!(Game.state().room)), false, 'B was paired with somebody who had cancelled');
+    await B.click('#btn-cancel-queue');
+    await B.waitForSelector('#screen-menu.active', { timeout: 8000 });
+  });
+
   section('spectating and chat');
 
   const C = await (await browser.newContext({ viewport: { width: 1280, height: 800 } })).newPage();

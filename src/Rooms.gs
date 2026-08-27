@@ -28,8 +28,12 @@ var ROOMS = {
   CHAT_COOLDOWN_MS: 700,
   COUNTDOWN_MS: 3500,
   INTERLUDE_MS: 4000,
-  // A client that has not synced for this long is treated as gone.
-  DROP_MS: 9000,
+  // A client that has not synced for this long is treated as gone. Generous
+  // on purpose: an Apps Script round trip is normally a few hundred
+  // milliseconds but can spike to seconds under load, and a player losing a
+  // ranked match because their host was briefly busy is far worse than a
+  // walkout taking a few more seconds to notice.
+  DROP_MS: 15000,
   // How often a live room refreshes its row so the janitor leaves it alone,
   // and how often a spectator refreshes their bench slot. Both are far
   // coarser than the sync tick because both only feed a ten-minute sweep.
@@ -407,6 +411,14 @@ function Rooms_advance_(room, states, now) {
 
     if (alive.length <= 1 && room.players.length >= 2) {
       var winner = alive.length === 1 ? alive[0] : null;
+      // Was anybody knocked out by silence rather than by topping out? The
+      // difference is the whole story from the losing end, and without it a
+      // dropped connection reads as the game deciding at random.
+      room.roundByDrop = room.players.some(function (p) {
+        if (winner && String(p.id) === String(winner.id)) return false;
+        var st = states[p.id];
+        return !st || !(Number(st.round) === Number(room.round) && st.alive === false);
+      });
       room.roundWinner = winner ? winner.id : null;
       if (winner) winner.wins = Number(winner.wins || 0) + 1;
       Rooms_creditKnockouts_(room, states, alive);
@@ -662,40 +674,56 @@ function Api_roomLeave(payload) {
   var player = Players_authenticate(payload);
   var code = String(payload.code || '').toUpperCase().trim();
 
-  Store_withLock(5000, function () {
+  var result = Store_withLock(5000, function () {
     var room = Rooms_load(code);
-    if (!room) return;
+    if (!room) return null;
 
     var watching = Rooms_spectatorIndex_(room, player.id);
     if (watching !== -1) {
       room.spectators.splice(watching, 1);
       Rooms_save(room);
-      return;
+      return null;
     }
 
     var idx = Rooms_playerIndex_(room, player.id);
-    if (idx === -1) return;
-    room.players.splice(idx, 1);
-    Store_cacheRemove(Rooms_stateKey_(code, player.id));
+    if (idx === -1) return null;
 
-    if (!room.players.length && !(room.spectators || []).length) {
-      Rooms_forget_(code);
-      return;
+    var live = room.state === 'playing' || room.state === 'countdown' || room.state === 'roundover';
+
+    // A ranked match in progress is settled before the seat is vacated: the
+    // rating update needs both players still at the table.
+    var forfeited = null;
+    if (live && room.mode === 'ranked' && room.players.length >= 2) {
+      forfeited = Rooms_forfeit_(room, player.id);
     }
-    if (room.players.length && String(room.host) === String(player.id)) {
-      room.host = room.players[0].id;
+
+    if (!forfeited) {
+      room.players.splice(idx, 1);
+      Store_cacheRemove(Rooms_stateKey_(code, player.id));
+
+      if (!room.players.length && !(room.spectators || []).length) {
+        Rooms_forget_(code);
+        return null;
+      }
+      if (room.players.length && String(room.host) === String(player.id)) {
+        room.host = room.players[0].id;
+      }
+      // A walkout mid-match ends it rather than leaving the survivor waiting.
+      if (live) {
+        room.state = 'lobby';
+        room.round = 0;
+        room.players.forEach(function (p) { p.wins = 0; });
+      }
     }
-    // A walkout mid-match ends it rather than leaving the survivor waiting.
-    if (room.state === 'playing' || room.state === 'countdown' || room.state === 'roundover') {
-      room.state = 'lobby';
-      room.round = 0;
-      room.players.forEach(function (p) { p.wins = 0; });
-    }
+
     Rooms_save(room);
     Rooms_indexUpsert_(room);
+    return forfeited ? (forfeited.delta || {})[player.id] || null : null;
   });
 
-  return { left: true };
+  // What it cost, so the client can say so rather than let the player find
+  // out later from their profile.
+  return { left: true, forfeit: (result.ran && result.value) || null };
 }
 
 function Api_roomConfig(payload) {
@@ -758,13 +786,7 @@ function Api_sync(payload) {
   }
 
   // 2. Read everyone (including ourselves, so transitions see a full picture).
-  var keys = room.players.map(function (p) { return Rooms_stateKey_(code, p.id); });
-  var rawStates = Store_cacheGetAll(keys);
-  var states = {};
-  room.players.forEach(function (p) {
-    var st = rawStates[Rooms_stateKey_(code, p.id)];
-    if (st) states[p.id] = st;
-  });
+  var states = Rooms_statesFor_(room);
   if (mine) states[id] = mine;
 
   // 3. Advance the room if needed. Under contention we simply skip: the next
@@ -832,6 +854,46 @@ function Rooms_touchSpectator_(code, id, now) {
     fresh.spectators[at].ts = now;
     Rooms_save(fresh);
   });
+}
+
+/** Every seated player's latest published state, keyed by player id. */
+function Rooms_statesFor_(room) {
+  var keys = room.players.map(function (p) { return Rooms_stateKey_(room.code, p.id); });
+  var raw = Store_cacheGetAll(keys);
+  var states = {};
+  room.players.forEach(function (p) {
+    var st = raw[Rooms_stateKey_(room.code, p.id)];
+    if (st) states[p.id] = st;
+  });
+  return states;
+}
+
+/**
+ * Walking out of a live ranked match is a loss, not an exit.
+ *
+ * Leaving used to reset the room to a lobby and cost nothing, which made
+ * quitting the cheapest way out of a game you were losing — and left the
+ * player who stayed with neither a win nor their rating back. The remaining
+ * rounds are awarded to whoever stayed, and the match settles through the
+ * same path as one played to the end, so the rating update is the ordinary
+ * one and it lands in the history like any other result.
+ */
+function Rooms_forfeit_(room, quitterId) {
+  var other = null;
+  room.players.forEach(function (p) {
+    if (String(p.id) !== String(quitterId)) other = other || p;
+  });
+  if (!other) return null;
+
+  other.wins = Math.max(Number(other.wins || 0), Number(room.config.ft));
+  room.state = 'matchover';
+  room.roundWinner = other.id;
+  room.roundByDrop = false;
+  room.matchWinner = other.id;
+  room.readyEpoch = Number(room.readyEpoch || 1) + 1;
+  room.results = Rooms_finishMatch_(room, Rooms_statesFor_(room));
+  room.results.forfeit = quitterId;
+  return room.results;
 }
 
 function Rooms_chatSince_(room, since) {
@@ -943,6 +1005,7 @@ function Rooms_publicView_(room) {
     startAt: room.startAt,
     nextRoundAt: room.nextRoundAt,
     roundWinner: room.roundWinner,
+    roundByDrop: !!room.roundByDrop,
     matchWinner: room.matchWinner,
     results: room.results
   };

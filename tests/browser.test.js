@@ -534,6 +534,36 @@ const { testAsync: t, assert, eq, section, note, finish } = require('./lib/repor
     await page.waitForSelector('#screen-menu.active', { timeout: 5000 });
   });
 
+  section('a sync that never answers');
+
+  await t('the loop gives up on it instead of going silent', async () => {
+    // google.script.run can lose a response outright. The client used to
+    // hold the gate for it forever, stop publishing its board, and be
+    // declared dead by a server that heard nothing — a ranked match lost to
+    // a dropped HTTP reply.
+    const seen = await page.evaluate(async () => {
+      const wait = ms => new Promise(r => setTimeout(r, ms));
+      Net.resetSyncGate();
+      const before = window.__rpcSent;
+      window.__rpcDelay = 999999;              // the reply never arrives
+
+      Net.sync('ZZZZZ', {}, 0);
+      const gated = await Net.sync('ZZZZZ', {}, 0);
+      const duringGate = window.__rpcSent - before;
+
+      await wait(5400);                        // past the deadline
+      Net.sync('ZZZZZ', {}, 0);
+      const afterDeadline = window.__rpcSent - before;
+
+      window.__rpcDelay = 20;
+      Net.resetSyncGate();
+      return { gated, duringGate, afterDeadline };
+    });
+    eq(seen.gated, null, 'a second call should be dropped while one is usefully in flight');
+    eq(seen.duringGate, 1, 'the gate let ' + seen.duringGate + ' calls out at once');
+    eq(seen.afterDeadline, 2, 'the loop never recovered from the call that hung');
+  });
+
   section('typography');
 
   await t('nothing that holds Hangul is letterspaced apart', async () => {

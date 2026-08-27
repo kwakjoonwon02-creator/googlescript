@@ -15,6 +15,8 @@ var MM = {
   // a heartbeat, and is kept until its owner has had a fair chance to
   // collect it however slowly they are polling.
   MATCHED_MS: 120000,
+  // How long a cancellation outranks a poll that was already on its way.
+  LEFT_MS: 8000,
   BASE_BAND: 800,        // TR difference accepted immediately
   BAND_PER_SEC: 450,     // ...widened by this much for every second waited
   MAX_BAND: 30000,
@@ -55,6 +57,7 @@ function MM_prune_(queue, now) {
  * drops the key on the way past.
  */
 function MM_seatKey_(playerId) { return 'mm:seat:' + playerId; }
+function MM_leftKey_(playerId) { return 'mm:left:' + playerId; }
 
 function MM_currentRoom_(playerId) {
   var code = Store_cacheGet(MM_seatKey_(playerId));
@@ -139,7 +142,16 @@ function MM_pair_(queue, now) {
  * that pairs straight away returns the room instead of making the client
  * wait for its next poll.
  */
-function MM_enterAndResolve_(player, now) {
+/**
+ * @param {boolean} joining true for an explicit press of Ranked, false for
+ *   the poll that follows. The difference matters: a poll must be able to
+ *   put a player back in the queue whose entry the cache dropped, but it
+ *   must not put back one they just cancelled. Polls are in flight when the
+ *   cancel arrives, and the one that landed a moment later used to re-queue
+ *   the player who had just walked away — who then sat on the menu, still
+ *   searching, and got pulled into a match they had said no to.
+ */
+function MM_enterAndResolve_(player, now, joining) {
   return Store_withLock(6000, function () {
     var queue = MM_prune_(MM_read_(), now);
 
@@ -156,6 +168,15 @@ function MM_enterAndResolve_(player, now) {
     for (var i = 0; i < queue.length; i++) {
       if (String(queue[i].id) === String(player.id)) { mine = queue[i]; break; }
     }
+
+    if (joining) {
+      // Pressing Ranked is intent, and it overrides the last cancellation.
+      Store_cacheRemove(MM_leftKey_(player.id));
+    } else if (!mine && Store_cacheGet(MM_leftKey_(player.id))) {
+      MM_write_(queue);
+      return { queue: queue, room: null, joinedAt: now, left: true };
+    }
+
     if (!mine) {
       mine = MM_entryFor_(player, now);
       queue.push(mine);
@@ -184,7 +205,7 @@ function Api_queueJoin(payload) {
     throw new Error('경쟁 모드는 계정이 필요합니다. 설정에서 비밀번호를 등록해 주세요.');
   }
   var now = Store_now();
-  var result = MM_enterAndResolve_(player, now);
+  var result = MM_enterAndResolve_(player, now, true);
   if (!result.ran) throw new Error('매치메이킹 서버가 혼잡합니다. 다시 시도해 주세요.');
   return MM_response_(result.value, player.id, now);
 }
@@ -192,8 +213,9 @@ function Api_queueJoin(payload) {
 function Api_queuePoll(payload) {
   var player = Players_authenticate(payload);
   var now = Store_now();
-  var result = MM_enterAndResolve_(player, now);
+  var result = MM_enterAndResolve_(player, now, false);
   if (!result.ran) return { matched: false, busy: true, waiting: 0 };
+  if (result.value.left) return { matched: false, left: true, waiting: 0 };
   return MM_response_(result.value, player.id, now);
 }
 
@@ -211,8 +233,10 @@ function MM_response_(value, playerId, now) {
 function Api_queueLeave(payload) {
   var player = Players_authenticate(payload);
   // Cancelling means cancelling: if a match was found in the moment before
-  // the button was pressed, do not drag them back into it later.
+  // the button was pressed, do not drag them back into it later, and do not
+  // let a poll that is already in flight put them back in the queue.
   Store_cacheRemove(MM_seatKey_(player.id));
+  Store_cachePut(MM_leftKey_(player.id), Store_now(), Math.ceil(MM.LEFT_MS / 1000));
   Store_withLock(6000, function () {
     var queue = MM_read_().filter(function (e) { return String(e.id) !== String(player.id); });
     MM_write_(queue);

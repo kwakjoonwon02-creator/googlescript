@@ -424,7 +424,14 @@ var App = (function () {
    * strand whoever completes the pair, because the server has already taken
    * their queue entry.
    */
+  /* Every search carries a number. Pressing cancel bumps it, so a reply to
+     a call that was already on its way cannot act on a search that is over —
+     which is how cancelling used to leave you queued, and occasionally drop
+     you into a match from the menu. */
+  var queueSeq = 0;
+
   function handleQueueStatus(status) {
+    if (status.left) { stopQueue(); return true; }
     if (status.matched) {
       stopQueue();
       U.$('#queue-title').textContent = '매치 성사!';
@@ -450,15 +457,27 @@ var App = (function () {
     showScreen('queue');
     queueStartedAt = Date.now();
     U.$('#queue-title').textContent = '상대를 찾는 중…';
+    var seq = ++queueSeq;
     Net.queueJoin().then(function (status) {
+      if (seq !== queueSeq) return;
       if (handleQueueStatus(status)) return;
       stopQueue();
       queueTimer = setInterval(pollQueue, QUEUE_POLL_MS);
-    }).catch(queueFailed);
+    }).catch(function (err) {
+      if (seq !== queueSeq) return;
+      queueFailed(err);
+    });
   }
 
   function pollQueue() {
-    Net.queuePoll().then(handleQueueStatus).catch(queueFailed);
+    var seq = queueSeq;
+    Net.queuePoll().then(function (status) {
+      if (seq !== queueSeq) return;
+      handleQueueStatus(status);
+    }).catch(function (err) {
+      if (seq !== queueSeq) return;
+      queueFailed(err);
+    });
   }
 
   function paintQueue(status) {
@@ -1060,15 +1079,23 @@ var App = (function () {
 
   /** Walking out of a live match hands the round to the opponent, so ask. */
   function confirmForfeit() {
-    var playing = Game.state().phase === 'playing';
+    var st = Game.state();
+    var playing = st.phase === 'playing' || st.phase === 'ready' || st.phase === 'roundover';
+    var ranked = !!(st.room && st.room.mode === 'ranked');
+    var body;
+    if (playing && ranked) {
+      body = '지금 나가면 이 경기는 패배로 기록되고 TR이 깎입니다.';
+    } else if (playing) {
+      body = '지금 나가면 남은 라운드는 상대의 승리로 처리됩니다.';
+    } else {
+      body = '방을 나가면 대기 중인 상대와의 연결이 끊어집니다.';
+    }
     var box = U.el('div', {}, [
-      U.el('div', { class: 'panel-title', text: playing ? '경기를 기권할까요?' : '방에서 나갈까요?' }),
-      U.el('p', {
-        class: 'hint',
-        text: playing
-          ? '지금 나가면 남은 라운드는 상대의 승리로 처리됩니다.'
-          : '방을 나가면 대기 중인 상대와의 연결이 끊어집니다.'
+      U.el('div', {
+        class: 'panel-title',
+        text: playing ? (ranked ? '기권하고 나갈까요?' : '경기를 기권할까요?') : '방에서 나갈까요?'
       }),
+      U.el('p', { class: 'hint', text: body }),
       U.el('div', { style: 'height:16px' })
     ]);
     var leaveBtn = U.el('button', { class: 'btn danger wide', text: '나가기' });
@@ -1084,6 +1111,7 @@ var App = (function () {
   }
 
   function cancelQueue() {
+    queueSeq++;                 // anything still in flight is now stale
     stopQueue();
     Net.queueLeave().catch(function () {});
     showScreen('menu');

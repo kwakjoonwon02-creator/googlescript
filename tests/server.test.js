@@ -18,6 +18,10 @@ function newGuest(s) {
   return { id: d.credentials.id, token: d.credentials.token, name: d.profile.name, profile: d.profile };
 }
 
+/* Read from the server rather than repeated here, so widening the window
+   does not silently turn these into tests of nothing. */
+function ROOMS_DROP_MS(s) { return s.ROOMS.DROP_MS; }
+
 function baseState(over) {
   return Object.assign({
     ready: false, round: 0, alive: true, b: '0'.repeat(200), p: null, h: null, g: 0,
@@ -427,6 +431,49 @@ t('pressing ranked again during a match returns the same room', () => {
   eq(s.Store_readAll('Rooms').filter(r => r.mode === 'ranked').length, 1, 'more than one ranked room exists');
 });
 
+t('a poll already in flight cannot undo a cancellation', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha');
+  ok(s.rpc('queueJoin', { id: a.id, token: a.token }));
+  ok(s.rpc('queueLeave', { id: a.id, token: a.token }));
+
+  // The poll that was on its way when the button was pressed. It used to
+  // put the player straight back in the queue, so cancel did nothing and
+  // they could be matched while sitting on the menu.
+  const late = ok(s.rpc('queuePoll', { id: a.id, token: a.token }));
+  eq(late.matched, false, 'matched after cancelling');
+  eq(late.left, true, 'the poll should report that this player has left');
+  eq(s.MM_read_().length, 0, 'the cancelled player is back in the queue');
+
+  // ...and somebody else arriving does not find them there to pair with.
+  const b = newPlayer(s, 'Bravo');
+  eq(ok(s.rpc('queueJoin', { id: b.id, token: b.token })).matched, false,
+     'Bravo was paired with somebody who had cancelled');
+});
+
+t('pressing ranked again after cancelling starts a real search', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo');
+  ok(s.rpc('queueJoin', { id: a.id, token: a.token }));
+  ok(s.rpc('queueLeave', { id: a.id, token: a.token }));
+
+  // Pressing the button is intent, and it outranks the cancellation that
+  // came a second earlier.
+  eq(ok(s.rpc('queueJoin', { id: a.id, token: a.token })).matched, false, 'joined');
+  eq(ok(s.rpc('queueJoin', { id: b.id, token: b.token })).matched, true,
+     'the re-queued player was not there to pair with');
+});
+
+t('a poll still restores an entry the cache dropped', () => {
+  const s = makeSandbox();
+  const a = newPlayer(s, 'Alpha');
+  ok(s.rpc('queueJoin', { id: a.id, token: a.token }));
+  // Not a cancellation — CacheService simply lost the queue.
+  s.__evict('mm:queue');
+  ok(s.rpc('queuePoll', { id: a.id, token: a.token }));
+  eq(s.MM_read_().length, 1, 'a waiting player was left out of the rebuilt queue');
+});
+
 t('cancelling really cancels', () => {
   const s = makeSandbox();
   const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo');
@@ -482,6 +529,118 @@ t('nobody is ever handed a room they are not seated in', () => {
     });
   });
   note(Object.keys(byRoom).length + ' rooms, ' + seen.size + ' of 6 matched');
+});
+
+section('leaving a ranked match');
+
+t('a walkout is a loss, and it costs rating', () => {
+  const s = makeSandbox();
+  const { a, b, code } = pairUp(s);
+  const before = ok(s.rpc('profile', { id: b.id, token: b.token })).profile.tr;
+
+  sync(s, a, code, { ready: true });
+  let r = sync(s, b, code, { ready: true });
+  s.__clock.set(r.room.startAt + 10);
+  sync(s, a, code, { ready: true, round: 1 });
+  sync(s, b, code, { ready: true, round: 1 });
+
+  const left = ok(s.rpc('roomLeave', { id: b.id, token: b.token, code }));
+  assert(left.forfeit, 'the leaver was not told what it cost');
+  assert(left.forfeit.trAfter < left.forfeit.trBefore,
+    'TR went ' + left.forfeit.trBefore + ' -> ' + left.forfeit.trAfter);
+
+  const after = ok(s.rpc('profile', { id: b.id, token: b.token })).profile;
+  assert(after.tr < before, 'the quitter kept their rating');
+  eq(after.losses, 1, 'the walkout was not recorded as a loss');
+  note('forfeit cost ' + (left.forfeit.trAfter - left.forfeit.trBefore) + ' TR');
+});
+
+t('the player who stayed gets the win and the rating for it', () => {
+  const s = makeSandbox();
+  const { a, b, code } = pairUp(s);
+  sync(s, a, code, { ready: true });
+  let r = sync(s, b, code, { ready: true });
+  s.__clock.set(r.room.startAt + 10);
+  sync(s, a, code, { ready: true, round: 1 });
+  sync(s, b, code, { ready: true, round: 1 });
+  ok(s.rpc('roomLeave', { id: b.id, token: b.token, code }));
+
+  r = sync(s, a, code, { ready: false, round: 1 });
+  eq(r.room.state, 'matchover', 'the match should be over, not back in a lobby');
+  eq(r.room.matchWinner, a.id, 'the player who stayed did not win');
+  eq(r.room.results.ranked, true, 'settled as ranked');
+  eq(r.room.results.forfeit, b.id, 'the result does not say who walked');
+  eq(r.room.results.scores[a.id], 3, 'the remaining rounds were not awarded');
+
+  const win = ok(s.rpc('profile', { id: a.id, token: a.token })).profile;
+  eq(win.wins, 1, 'the win was not recorded');
+  assert(win.tr > 12500, 'no rating was gained: ' + win.tr);
+});
+
+t('it is recorded in history like any other match', () => {
+  const s = makeSandbox();
+  const { a, b, code } = pairUp(s);
+  sync(s, a, code, { ready: true });
+  let r = sync(s, b, code, { ready: true });
+  s.__clock.set(r.room.startAt + 10);
+  sync(s, a, code, { ready: true, round: 1 });
+  ok(s.rpc('roomLeave', { id: b.id, token: b.token, code }));
+
+  const history = ok(s.rpc('profile', { id: a.id, token: a.token })).history;
+  eq(history.length, 1, 'no history row');
+  eq(history[0].won, true, 'recorded as a loss for the wrong player');
+  eq(history[0].mode, 'ranked', 'mode');
+  assert(history[0].trDelta > 0, 'TR delta ' + history[0].trDelta);
+});
+
+t('leaving a ranked room before it starts costs nothing', () => {
+  const s = makeSandbox();
+  const { a, b, code } = pairUp(s);
+  // Neither has readied up: there is no match to lose.
+  const left = ok(s.rpc('roomLeave', { id: b.id, token: b.token, code }));
+  eq(left.forfeit, null, 'a lobby walkout was rated');
+  eq(ok(s.rpc('profile', { id: b.id, token: b.token })).profile.games, 0, 'a game was recorded');
+});
+
+t('a match already over is not settled twice', () => {
+  const s = makeSandbox();
+  const { a, b, code } = pairUp(s);
+  playMatch(s, a, b, code, 3, 1);
+  const settled = ok(s.rpc('profile', { id: b.id, token: b.token })).profile;
+
+  ok(s.rpc('roomLeave', { id: b.id, token: b.token, code }));
+  const after = ok(s.rpc('profile', { id: b.id, token: b.token })).profile;
+  eq(after.games, settled.games, 'the finished match was counted again');
+  eq(after.tr, settled.tr, 'rating moved after the match had already settled');
+});
+
+section('why a round ended');
+
+t('a round decided by silence says so', () => {
+  const s = makeSandbox();
+  const { a, b, code } = pairUp(s);
+  sync(s, a, code, { ready: true });
+  let r = sync(s, b, code, { ready: true });
+  s.__clock.set(r.room.startAt + 10);
+  sync(s, a, code, { ready: true, round: 1 });
+  sync(s, b, code, { ready: true, round: 1 });
+
+  s.__clock.advance(ROOMS_DROP_MS(s) + 1000);
+  r = sync(s, a, code, { ready: true, round: 1 });
+  eq(r.room.state, 'roundover', 'the round should have ended');
+  eq(r.room.roundByDrop, true, 'a dropped opponent is reported as a top-out');
+});
+
+t('a round decided by a top-out does not', () => {
+  const s = makeSandbox();
+  const { a, b, code } = pairUp(s);
+  sync(s, a, code, { ready: true });
+  let r = sync(s, b, code, { ready: true });
+  s.__clock.set(r.room.startAt + 10);
+  sync(s, a, code, { ready: true, round: 1 });
+  r = sync(s, b, code, { ready: true, round: 1, alive: false });
+  eq(r.room.state, 'roundover', 'the round should have ended');
+  eq(r.room.roundByDrop, false, 'a real top-out is reported as a disconnect');
 });
 
 section('room state machine');
@@ -563,7 +722,7 @@ t('a disconnected player is treated as dead after the timeout', () => {
   sync(s, a, code, { ready: true, round: 1 });
   sync(s, b, code, { ready: true, round: 1 });
   // B goes silent; A keeps playing.
-  s.__clock.advance(10000);
+  s.__clock.advance(ROOMS_DROP_MS(s) + 1000);
   r = sync(s, a, code, { ready: true, round: 1 });
   eq(r.room.state, 'roundover', 'silence should end the round');
   eq(r.room.roundWinner, a.id, 'the connected player wins');
@@ -732,9 +891,12 @@ t('only the host can change the rules', () => {
   eq(updated.config.ft, 7, 'host change did not apply');
 });
 
-t('leaving mid-match sends the room back to the lobby', () => {
+t('leaving a casual match mid-game sends the room back to the lobby', () => {
   const s = makeSandbox();
-  const { a, b, code } = pairUp(s);
+  const a = newPlayer(s, 'Alpha'), b = newPlayer(s, 'Bravo');
+  const room = ok(s.rpc('roomCreate', { id: a.id, token: a.token })).room;
+  ok(s.rpc('roomJoin', { id: b.id, token: b.token, code: room.code }));
+  const code = room.code;
   sync(s, a, code, { ready: true });
   let r = sync(s, b, code, { ready: true });
   s.__clock.set(r.room.startAt + 10);
@@ -870,7 +1032,7 @@ t('a player who really is gone is still dropped after a wipe', () => {
   // Bravo never comes back. The grace the restore buys runs out.
   r = sync(s, a, code, { ready: true, round: 1 });
   eq(r.room.state, 'playing', 'not judged during the grace window');
-  s.__clock.advance(10000);
+  s.__clock.advance(ROOMS_DROP_MS(s) + 1000);
   r = sync(s, a, code, { ready: true, round: 1 });
   eq(r.room.state, 'roundover', 'silence should still end the round');
   eq(r.room.roundWinner, a.id, 'the player who stayed wins');
